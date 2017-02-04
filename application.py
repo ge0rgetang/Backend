@@ -20,19 +20,25 @@ from firebase import firebase
 from firebase_token_generator import create_token
 from Crypto.Cipher import AES
 import base64
+import threading
+from multiprocessing import Pool
+from flask_sslify import SSLify
 
 
 
 PROF_BUCKET = 'hostpostuserprof'
 GROUP_BUCKET = 'hostpostgroup'
 EVENT_BUCKET = 'hostposteventimage'
-PLATFORM_APPLICATION_ARN = 'arn:aws:sns:us-west-1:554061732115:app/APNS_SANDBOX/hostPostDev'
+#PLATFORM_APPLICATION_ARN = 'arn:aws:sns:us-west-1:554061732115:app/APNS_SANDBOX/hostPostDev' #Test
+PLATFORM_APPLICATION_ARN = 'arn:aws:sns:us-west-1:554061732115:app/APNS/.native'
 AWS_ACCESS_KEY_ID = "AKIAJFOIRUAH3BFBSW4A"#"AKIAIAWLQ6C2HQNAFCOA"
 AWS_SECRET_ACCESS_KEY = "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"#"r9Cb5qyfGttKN5V7qEiGuV/XDp4pYUCI8NrhG56L"
 DEFAULT_LIMIT = 42
 SECONDARY_LIMIT = 88
 FIREBASE_URL = 'https://dotnative-2ec5a.firebaseio.com'
 FIREBASE_SECRET = 'zBQLIb0ly88Sw2mjLPdfo6tbsUEQ5TpOMvXX9HyA'
+
+EXCLUDED_HANDLES = ["ge0rgetang", "georgetang", "gtang", "gtang42", "gtang43", "george", "georget", "tang", "simon", "randy", "MTVacuum"]
 
 MODE = AES.MODE_CBC
 
@@ -43,14 +49,16 @@ MAX_RADIUS = 10
 MAX_TIME = 108
 
 
+
 application = Flask(__name__)
+sslify = SSLify(application)
 
 application.secret_key = 'cC1YCIWOj9GgWspgNEo2'
 
 
 @application.before_request
 def before_request():
-    if request.endpoint not in ('newDeviceID', 'handleCheck','front.front','static','reportBug','getBugReports'): #change this
+    if request.endpoint not in ('front.FBAppLink','front.appTester', 'test', 'newDeviceID', 'handleCheck', 'front.front','static', 'reportBug','getBugReports'): 
         if not (validate()):
             return json.dumps({'status':'error','message':'Unauthorized'})
 
@@ -106,6 +114,29 @@ def login():
         pass    
     return json.dumps(result)
 
+@application.route('/logout', methods=['POST'])
+def logout():
+    result = {'status':'error','message':'Invalid request'}
+    if request.method == 'POST':
+        if 'myID' in request.form:
+            userID = request.form['myID']
+        else:
+            return json.dumps(result)
+    else:
+        return json.dumps(result)
+    try:
+        user_check = db.session.query(users.u_id).filter(users.u_id==userID).update({'device_arn':0})
+        db.session.commit()
+        result['status']='success'  
+        result['message']='logged out'
+    except Exception, e:
+        db.session.rollback()
+        result = {'status':'error', 'message':str(e)}
+        #result = {'status':'error', 'message':'Logout error'}
+    finally:
+        db.session.close()
+    return json.dumps(result)
+
 @application.route('/register', methods=['POST'])
 def register():
     result = {'status':'error','message':'Invalid request'}
@@ -113,6 +144,8 @@ def register():
         if all (k in request.form for k in ('myIDFIR','deviceID','userEmail','userName','userHandle','isPicSet')):
             userEmail = request.form['userEmail']
             userHandle = request.form['userHandle']
+            if userHandle.lower() in EXCLUDED_HANDLES:
+                return json.dumps(result)
             userName = request.form['userName']
             #hashpaswrd = hash_password(request.form['userPassword'].encode('utf-8'))
             picSet = request.form['isPicSet']
@@ -206,21 +239,22 @@ def getMixedPost():
         '''
         min_long, max_long, min_lat, max_lat = getMinMaxLongLat(myLong, myLat, radius)
         if sort == 'new':
-            if lastPostID==0:
-                get_forum_check = db.session.query(forumPosts.post_id, users.u_id, users.u_name, users.u_handle,users.u_key, users.firebase_id, forumPosts.post_cont, forumPosts.points_count, forumPosts.reply_count, forumPosts.date_time, forumPosts.date_time_edited, forumPostUpvoted.points).filter(forumPosts.post_u_id==users.u_id).filter(forumPosts.original_post_id==0).filter(forumPosts.post_lat.between(min_lat, max_lat)).filter(forumPosts.post_long.between(min_long, max_long)).outerjoin(forumPostUpvoted, and_(forumPostUpvoted.post_id==forumPosts.post_id, forumPostUpvoted.voter_id==myID)).order_by(forumPosts.date_time.desc()).distinct().limit(DEFAULT_LIMIT)
-                get_anon_check = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_original_post_id==0).filter(anonForumPosts.a_post_lat.between(min_lat, max_lat)).filter(anonForumPosts.a_post_long.between(min_long, max_long)).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_date_time.desc()).distinct().limit(DEFAULT_LIMIT)
-            else:      
-                get_forum_check = db.session.query(forumPosts.post_id, users.u_id, users.u_name, users.u_handle,users.u_key, users.firebase_id, forumPosts.post_cont, forumPosts.points_count, forumPosts.reply_count, forumPosts.date_time, forumPosts.date_time_edited, forumPostUpvoted.points).filter(forumPosts.post_u_id==users.u_id).filter(forumPosts.original_post_id==0).filter(forumPosts.post_id < lastPostID).filter(forumPosts.post_lat.between(min_lat, max_lat)).filter(forumPosts.post_long.between(min_long, max_long)).outerjoin(forumPostUpvoted, and_(forumPostUpvoted.post_id==forumPosts.post_id, forumPostUpvoted.voter_id==myID)).order_by(forumPosts.date_time.desc()).distinct().limit(DEFAULT_LIMIT)
-                get_anon_check = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_post_id < lastPostID).filter(anonForumPosts.a_original_post_id==0).filter(anonForumPosts.a_post_lat.between(min_lat, max_lat)).filter(anonForumPosts.a_post_long.between(min_long, max_long)).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_date_time.desc()).distinct().limit(DEFAULT_LIMIT)
-                #return json.dumps({'status':'error','message':'got here'})
+            get_forum_check = db.session.query(forumPosts.post_id, users.u_id, users.u_name, users.u_handle,users.u_key, users.firebase_id, forumPosts.post_cont, forumPosts.points_count, forumPosts.reply_count, forumPosts.date_time, forumPosts.date_time_edited, forumPostUpvoted.points, forumPosts.is_pinned).filter(forumPosts.post_u_id==users.u_id).filter(forumPosts.original_post_id==0).filter(forumPosts.post_lat.between(min_lat, max_lat)).filter(forumPosts.post_long.between(min_long, max_long)).outerjoin(forumPostUpvoted, and_(forumPostUpvoted.post_id==forumPosts.post_id, forumPostUpvoted.voter_id==myID))
+            get_anon_check = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_original_post_id==0).filter(anonForumPosts.a_post_lat.between(min_lat, max_lat)).filter(anonForumPosts.a_post_long.between(min_long, max_long)).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID))
+            if lastPostID !=0:
+                get_forum_check = get_forum_check.filter(forumPosts.post_id < lastPostID)    
+                get_anon_check = get_anon_check.filter(anonForumPosts.a_post_id < lastPostID)
+            get_forum_check = get_forum_check.order_by(forumPosts.date_time.desc()).distinct().limit(DEFAULT_LIMIT)
+            get_anon_check = get_anon_check.order_by(anonForumPosts.a_date_time.desc()).distinct().limit(DEFAULT_LIMIT)
         elif sort == 'hot':
             timeCut = datetime.now() - timedelta(hours = 24) # adjust time range?
-            if lastPostID == 0:
-                get_forum_check = db.session.query(forumPosts.post_id, users.u_id, users.u_name, users.u_handle,users.u_key, users.firebase_id, forumPosts.post_cont, forumPosts.points_count, forumPosts.reply_count, forumPosts.date_time, forumPosts.date_time_edited, forumPostUpvoted.points).filter(forumPosts.date_time > timeCut).filter(forumPosts.post_u_id==users.u_id).filter(forumPosts.original_post_id==0).filter(forumPosts.post_lat.between(min_lat, max_lat)).filter(forumPosts.post_long.between(min_long, max_long)).filter(forumPosts.points_count!=0).outerjoin(forumPostUpvoted, and_(forumPostUpvoted.post_id==forumPosts.post_id, forumPostUpvoted.voter_id==myID)).order_by(forumPosts.points_count.desc()).distinct().limit(DEFAULT_LIMIT) #restrict by date
-                get_anon_check = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points).filter(anonForumPosts.a_date_time > timeCut).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_original_post_id==0).filter(anonForumPosts.a_post_lat.between(min_lat, max_lat)).filter(anonForumPosts.a_post_long.between(min_long, max_long)).filter(anonForumPosts.a_points_count!=0).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_points_count.desc()).distinct().limit(DEFAULT_LIMIT) #restrict by date
-            else:
-                get_forum_check = db.session.query(forumPosts.post_id, users.u_id, users.u_name, users.u_handle,users.u_key, users.firebase_id, forumPosts.post_cont, forumPosts.points_count, forumPosts.reply_count, forumPosts.date_time, forumPosts.date_time_edited, forumPostUpvoted.points).filter(forumPosts.date_time > timeCut).filter(forumPosts.post_u_id==users.u_id).filter(forumPosts.original_post_id==0).filter(forumPosts.post_id < lastPostID).filter(forumPosts.post_lat.between(min_lat, max_lat)).filter(forumPosts.post_long.between(min_long, max_long)).filter(forumPosts.points_count!=0).outerjoin(forumPostUpvoted, and_(forumPostUpvoted.post_id==forumPosts.post_id, forumPostUpvoted.voter_id==myID)).order_by(forumPosts.points_count.desc()).distinct().limit(DEFAULT_LIMIT) #restrict by date
-                get_anon_check = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points).filter(anonForumPosts.a_date_time > timeCut).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_post_id < lastPostID).filter(anonForumPosts.a_original_post_id==0).filter(anonForumPosts.a_post_lat.between(min_lat, max_lat)).filter(anonForumPosts.a_post_long.between(min_long, max_long)).filter(anonForumPosts.a_points_count!=0).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_points_count.desc()).distinct().limit(DEFAULT_LIMIT) #restrict by date
+            get_forum_check = db.session.query(forumPosts.post_id, users.u_id, users.u_name, users.u_handle,users.u_key, users.firebase_id, forumPosts.post_cont, forumPosts.points_count, forumPosts.reply_count, forumPosts.date_time, forumPosts.date_time_edited, forumPostUpvoted.points, forumPosts.is_pinned).filter(forumPosts.date_time > timeCut).filter(forumPosts.post_u_id==users.u_id).filter(forumPosts.original_post_id==0).filter(forumPosts.post_lat.between(min_lat, max_lat)).filter(forumPosts.post_long.between(min_long, max_long)).filter(forumPosts.points_count!=0).outerjoin(forumPostUpvoted, and_(forumPostUpvoted.post_id==forumPosts.post_id, forumPostUpvoted.voter_id==myID))
+            get_anon_check = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_date_time > timeCut).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_original_post_id==0).filter(anonForumPosts.a_post_lat.between(min_lat, max_lat)).filter(anonForumPosts.a_post_long.between(min_long, max_long)).filter(anonForumPosts.a_points_count!=0).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID))
+            if lastPostID !=0:
+                get_forum_check = get_forum_check.filter(forumPosts.post_id < lastPostID)
+                get_anon_check = get_anon_check.filter(anonForumPosts.a_post_id < lastPostID)
+            get_forum_check = get_forum_check.order_by(forumPosts.points_count.desc()).distinct().limit(DEFAULT_LIMIT) 
+            get_anon_check = get_anon_check.order_by(anonForumPosts.a_points_count.desc()).distinct().limit(DEFAULT_LIMIT) 
         else:
             result={'status':'error', 'message':'Invalid Sort'}   
         if get_forum_check.first() is None or get_anon_check.first() is None:
@@ -231,10 +265,10 @@ def getMixedPost():
                 result['message'] = 'No results found'
             else:
                 result['message'] = 'Results Found'
-                anon_labels = ['postID','userID','firebaseID','postContent','pointsCount','replyCount','timestamp','timestampEdited','didIVote']
+                anon_labels = ['postID','userID','firebaseID','postContent','pointsCount','replyCount','timestamp','timestampEdited','didIVote','isPinned']
                 add_all = 'bucket'
                 anonForumPostsList = add_labels(anon_labels,get_anon_check, first_initial=True)
-                forum_labels = ['postID','userID','userName','userHandle','key','firebaseID','postContent','pointsCount','replyCount','timestamp','timestampEdited','didIVote']
+                forum_labels = ['postID','userID','userName','userHandle','key','firebaseID','postContent','pointsCount','replyCount','timestamp','timestampEdited','didIVote','isPinned']
                 forumPostsList = add_labels(forum_labels,get_forum_check,add_all,PROF_BUCKET, True, keySize=size)
                 result['posts']=[]
                 if sort == 'new':
@@ -369,9 +403,9 @@ def getPondPost():
                 subq = db.session.query(forumPosts.original_post_id).filter(forumPosts.post_u_id == myID).filter(forumPosts.original_post_id != 0).distinct().subquery()
                 subq2 = db.session.query(forumPostUpvoted.post_id).filter(forumPostUpvoted.voter_id == myID).distinct().subquery()
                 if lastPostID == 0:
-                    get_my_posts = db.session.query(forumPosts.post_id, users.u_id, users.u_name, users.u_handle,users.u_key,users.firebase_id, forumPosts.post_cont, forumPosts.points_count, forumPosts.reply_count, forumPosts.date_time, forumPosts.date_time_edited, forumPostUpvoted.points, forumPosts.is_pinned).filter(forumPosts.post_u_id==users.u_id).filter(or_(forumPosts.post_u_id==myID, forumPosts.post_id.in_(subq2))).filter(or_(forumPosts.original_post_id==0, forumPosts.post_id.in_(subq))).outerjoin(forumPostUpvoted, and_(forumPostUpvoted.post_id==forumPosts.post_id, forumPostUpvoted.voter_id==myID)).order_by(forumPosts.date_time.desc()).distinct().limit(DEFAULT_LIMIT)
+                    get_my_posts = db.session.query(forumPosts.post_id, users.u_id, users.u_name, users.u_handle,users.u_key,users.firebase_id, forumPosts.post_cont, forumPosts.points_count, forumPosts.reply_count, forumPosts.date_time, forumPosts.date_time_edited, forumPostUpvoted.points, forumPosts.is_pinned).filter(forumPosts.post_u_id==users.u_id).filter(or_(forumPosts.post_u_id==myID, forumPosts.post_id.in_(subq2), forumPosts.post_id.in_(subq))).filter(forumPosts.original_post_id==0).outerjoin(forumPostUpvoted, and_(forumPostUpvoted.post_id==forumPosts.post_id, forumPostUpvoted.voter_id==myID)).order_by(forumPosts.date_time.desc()).distinct().limit(DEFAULT_LIMIT)
                 else:
-                    get_my_posts = db.session.query(forumPosts.post_id, users.u_id, users.u_name, users.u_handle,users.u_key,users.firebase_id, forumPosts.post_cont, forumPosts.points_count, forumPosts.reply_count, forumPosts.date_time, forumPosts.date_time_edited, forumPostUpvoted.points, forumPosts.is_pinned).filter(forumPosts.post_u_id==users.u_id).filter(or_(forumPosts.post_u_id==myID, forumPosts.post_id.in_(subq2))).filter(forumPosts.post_id < lastPostID).filter(or_(forumPosts.original_post_id==0, forumPosts.post_id.in_(subq))).outerjoin(forumPostUpvoted, and_(forumPostUpvoted.post_id==forumPosts.post_id, forumPostUpvoted.voter_id==myID)).order_by(forumPosts.date_time.desc()).distinct().limit(DEFAULT_LIMIT)
+                    db.session.query(forumPosts.post_id, users.u_id, users.u_name, users.u_handle,users.u_key,users.firebase_id, forumPosts.post_cont, forumPosts.points_count, forumPosts.reply_count, forumPosts.date_time, forumPosts.date_time_edited, forumPostUpvoted.points, forumPosts.is_pinned).filter(forumPosts.post_u_id==users.u_id).filter(or_(forumPosts.post_u_id==myID, forumPosts.post_id.in_(subq2), forumPosts.post_id.in_(subq))).filter(forumPosts.original_post_id==0).filter(forumPosts.post_id < lastPostID).outerjoin(forumPostUpvoted, and_(forumPostUpvoted.post_id==forumPosts.post_id, forumPostUpvoted.voter_id==myID)).order_by(forumPosts.date_time.desc()).distinct().limit(DEFAULT_LIMIT)
                 if get_my_posts.first() is not None:    
                     #query for post count
                     #return json.dumps({'result':'here'})
@@ -473,29 +507,37 @@ def sendPondPost():
         db.session.add(data_entered)
         db.session.flush()
         result['postID']=data_entered.post_id
-        db.session.commit()
+        db.session.commit() 
         if postID not in (0, -1):
             db.session.query(forumPosts).filter(forumPosts.post_id==postID).update({'reply_count':forumPosts.reply_count + 1})
             db.session.commit()
             user_check = db.session.query(users.u_id, users.u_handle, users.device_arn, users.firebase_id).filter(users.u_id==forumPosts.post_u_id).filter(forumPosts.post_id==postID).one()
-            if int(user_check.u_id) != int(myID):    
+            if user_check is not None and user_check != [] and int(user_check.u_id) != int(myID):    
                 my_check = db.session.query(users.u_handle).filter(users.u_id==myID).one()        
-                cont = '@' + my_check.u_handle + ' replied to your hub post: ' + postCont
-                subj = 'getMyForumPost'
+                cont = '@' + my_check.u_handle + ' replied to your pond post: ' + postCont
+                subj = 'getMyPondPost'
                 notificType = 'F'
                 notificUID = user_check.u_id
-                result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=postID)      
-                firebaseNotification(user_check.firebase_id, cont)
-                if user_check is not None and user_check != [] and user_check.u_id != myID:
-                    if user_check.device_arn != 0 and not inNotification(user_check.firebase_id):             
-                        badge = db.session.query(notific.notific_id).filter(notific.n_u_id==user_check.u_id).filter(notific.notific_seen==False).count()
-                        push(user_check.device_arn, badge, cont, subj)
+                inNot = inNotification(user_check.firebase_id)
+                if inNot == True:
+                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=postID)      
+                    firebaseNotification(user_check.firebase_id, cont)
+                    db.session.commit()
+                #print user_check.firebase_id
+                inPID = inPostID(user_check.firebase_id)
+                # inPostID == parentPostID, do NOT send push. 
+                if user_check.u_id != myID and inPID != 0 and inPID!=postID and user_check.device_arn != 0 and inNot==False:             
+                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=postID)      
+                    firebaseNotification(user_check.firebase_id, cont)
+                    db.session.commit()
+                    badge = db.session.query(notific.notific_id).filter(notific.n_u_id==user_check.u_id).filter(notific.notific_seen==False).count()
+                    push(user_check.device_arn, badge, cont, subj)
         result['status'] = 'success'
         result['message'] = 'Posted'
     except Exception, e:
         db.session.rollback()
-        #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'Post not sent'}
+        result = {'status':'error', 'message':str(e)}
+        #result = {'status':'error', 'message':'Post not sent'}
         pass
     finally:
         db.session.close()
@@ -553,17 +595,17 @@ def getAnonPondPost():
                 subq = db.session.query(anonForumPosts.a_original_post_id).filter(anonForumPosts.a_post_u_id == myID).filter(anonForumPosts.a_original_post_id != 0).distinct().subquery()
                 subq2 = db.session.query(anonForumPostUpvoted.post_id).filter(anonForumPostUpvoted.voter_id == myID).distinct().subquery()
                 if lastPostID == 0:
-                    get_my_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.u_name, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_u_id==users.u_id).filter(or_(anonForumPosts.a_post_u_id==myID, anonForumPosts.a_post_id.in_(subq2))).filter(or_(anonForumPosts.a_original_post_id==0, anonForumPosts.a_post_id.in_(subq))).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_date_time.desc()).distinct().limit(DEFAULT_LIMIT)
+                    get_my_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.u_name, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_u_id==users.u_id).filter(or_(anonForumPosts.a_post_u_id==myID, anonForumPosts.a_post_id.in_(subq2), anonForumPosts.a_post_id.in_(subq))).filter(anonForumPosts.a_original_post_id==0).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_date_time.desc()).distinct().limit(DEFAULT_LIMIT)
                 else:                
-                    get_my_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.u_name, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_id < lastPostID).filter(anonForumPosts.a_post_u_id==users.u_id).filter(or_(anonForumPosts.a_post_u_id==myID,anonForumPosts.a_post_id.in_(subq2))).filter(or_(anonForumPosts.a_original_post_id==0, anonForumPosts.a_post_id.in_(subq))).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_date_time.desc()).distinct().limit(DEFAULT_LIMIT)
+                    get_my_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.u_name, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_u_id==users.u_id).filter(or_(anonForumPosts.a_post_u_id==myID, anonForumPosts.a_post_id.in_(subq2), anonForumPosts.a_post_id.in_(subq))).filter(anonForumPosts.a_original_post_id==0).filter(anonForumPosts.a_post_id < lastPostID).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_date_time.desc()).distinct().limit(DEFAULT_LIMIT)
                 if get_my_posts is not None and get_my_posts != []:    
                     #query for post count
                     #return json.dumps({'result':'here'})
                     result['status'] = 'success'        
                     result['message'] = 'Results Found'
                     labels = ['postID','userID','userName', 'firebaseID', 'postContent', 'pointsCount', 'replyCount', 'timestamp', 'timestampEdited', 'didIVote','isPinned']
-                    result['anonForumPosts'] = add_labels(labels,get_my_posts,first_initial=True)
-                    if result['anonForumPosts'] == []:
+                    result['anonPondPosts'] = add_labels(labels,get_my_posts,first_initial=True)
+                    if result['anonPondPosts'] == []:
                         result['message'] = 'No results found'
             elif isMine == 'no':
                 radius, timeDel = dynamicRadiusHelper(myLong, myLat, 'anon', sort, radius, timeDel, lastPostID)
@@ -589,46 +631,46 @@ def getAnonPondPost():
                     result['status'] = 'success'        
                     result['message'] = 'Results Found'
                     labels = ['postID','userID', 'firebaseID', 'postContent','pointsCount','replyCount','timestamp','timestampEdited','didIVote', 'isPinned']
-                    result['anonForumPosts'] = add_labels(labels,get_post_check,first_initial=True)
-                    if result['anonForumPosts'] == []:
+                    result['anonPondPosts'] = add_labels(labels,get_post_check,first_initial=True)
+                    if result['anonPondPosts'] == []:
                         result['message'] = 'No results found'
         else: #actual postID
             reps = db.session.query(anonForumPosts.a_post_id).filter(anonForumPosts.a_original_post_id==postID).count()
             db.session.query(anonForumPosts.a_reply_count).filter(anonForumPosts.a_post_id==postID).update({'a_reply_count':reps})
             db.session.commit()
             if lastPostID==0:
-                get_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_u_id==users.u_id).filter(or_(anonForumPosts.a_post_id==postID, anonForumPosts.a_original_post_id==postID)).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).distinct().order_by(anonForumPosts.a_post_id).limit(DEFAULT_LIMIT)
                 '''
-                get_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.u_name, users.u_handle,users.u_key, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_post_id==postID).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).distinct().limit(DEFAULT_LIMIT)
-                get_replies = db.session.query(anonForumPost.a_post_id, users.u_id, users.u_name, users.u_handle, users.u_key, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_original_post_id==postID).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_post_id).distinct().limit(DEFAULT_LIMIT)
+                get_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_u_id==users.u_id).filter(or_(anonForumPosts.a_post_id==postID, anonForumPosts.a_original_post_id==postID)).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).distinct().order_by(anonForumPosts.a_post_id.desc()).limit(DEFAULT_LIMIT)
                 '''
+                get_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_post_id==postID).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).distinct().first()
+                get_replies = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_original_post_id==postID).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_post_id.desc()).distinct().limit(DEFAULT_LIMIT)
             else:
-                get_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_id < lastPostID).filter(anonForumPosts.a_post_u_id==users.u_id).filter(or_(anonForumPosts.a_post_id==postID, anonForumPosts.a_original_post_id==postID)).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).distinct().order_by(anonForumPosts.a_post_id).limit(DEFAULT_LIMIT)                
                 '''
-                get_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.u_name, users.u_handle,users.u_key, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points).filter(anonForumPosts.a_post_id < lastPostID).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_post_id==postID).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).distinct().limit(DEFAULT_LIMIT)
-            get_replies = db.session.query(anonForumPost.a_post_id, users.u_id, users.u_name, users.u_handle, users.u_key, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points).filter(anonForumPosts.a_post_id < lastPostID).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_original_post_id==postID).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_post_id).distinct().limit(DEFAULT_LIMIT) 
+                get_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_id < lastPostID).filter(anonForumPosts.a_post_u_id==users.u_id).filter(or_(anonForumPosts.a_post_id==postID, anonForumPosts.a_original_post_id==postID)).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).distinct().order_by(anonForumPosts.a_post_id.desc()).limit(DEFAULT_LIMIT)                
                 '''
-            if get_posts.first() is not None:
+                get_posts = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_post_id==postID).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).distinct().first()
+                get_replies = db.session.query(anonForumPosts.a_post_id, users.u_id, users.firebase_id, anonForumPosts.a_post_cont, anonForumPosts.a_points_count, anonForumPosts.a_reply_count, anonForumPosts.a_date_time, anonForumPosts.a_date_time_edited, anonForumPostUpvoted.points, anonForumPosts.is_pinned).filter(anonForumPosts.a_post_id < lastPostID).filter(anonForumPosts.a_post_u_id==users.u_id).filter(anonForumPosts.a_original_post_id==postID).outerjoin(anonForumPostUpvoted, and_(anonForumPostUpvoted.post_id==anonForumPosts.a_post_id, anonForumPostUpvoted.voter_id==myID)).order_by(anonForumPosts.a_post_id.desc()).distinct().limit(DEFAULT_LIMIT) 
+            if get_posts is not None and get_posts != []:
                 result['status'] = 'success' 
                 result['message'] = 'Results Found'
                 labels = ['postID','userID', 'firebaseID', 'postContent','pointsCount','replyCount','timestamp','timestampEdited','didIVote','isPinned']
                 add_all = 'bucket'
-                result['anonForumPosts'] = add_labels(labels,get_posts,add_all,PROF_BUCKET, first_initial=True)
-                if result['anonForumPosts'] == []:
+                if get_replies is not None and get_replies != []:
+                    result['anonPondPosts'] = add_labels(labels, get_posts, add_all, PROF_BUCKET, first_initial=True) + add_labels(labels,get_replies,add_all,PROF_BUCKET, first_initial=True)
+                else:
+                    result['anonPondPosts'] = add_labels(labels, get_posts, add_all, PROF_BUCKET, first_initial=True)
+                if result['anonPondPosts'] == []:
                     result['message'] = 'No results found'
-                    '''
                     if get_replies is not None:
                         if get_replies == []:
                             result['message'] = result['message'] + '. No replies found'
                         else:
-                            result['anonForumPosts'] = add_labels(labels,get_replies,add_all,PROF_BUCKET)
                             result['message'] = result['message'] + '. Replies found'
-                    '''
         db.session.close()
         result['status']='success'
     except Exception, e:
-        #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'No Posts Found'}
+        result = {'status':'error', 'message':str(e)}
+        #result = {'status':'error', 'message':'No Posts Found'}
         pass
     data = json.dumps(result)
     return data
@@ -664,17 +706,22 @@ def sendAnonPondPost():
             db.session.query(anonForumPosts).filter(anonForumPosts.a_post_id==postID).update({'a_reply_count':anonForumPosts.a_reply_count + 1})
             db.session.commit()
             user_check = db.session.query(users.u_id, users.u_handle, users.device_arn, users.firebase_id).filter(users.u_id==anonForumPosts.a_post_u_id).filter(anonForumPosts.a_post_id==postID).one()
+            inPID = inPostID(user_check.firebase_id) # inPostID == parentPostID, do NOT send push.
             if user_check is not None and user_check != {} and int(user_check.u_id) != int(myID):  
-                cont = 'Your anon hub post has been replied to: ' + postCont
-                subj = 'getMyAnonForumPost'
+                cont = 'Your anon pond post has been replied to: ' + postCont
+                subj = 'getMyAnonPondPost'
                 notificType = 'A'
                 notificUID = user_check.u_id
-                result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=postID)
-                firebaseNotification(user_check.firebase_id, cont)
-                if user_check is not None and user_check != [] and user_check.u_id != myID:
-                    if user_check.device_arn != 0 and not inNotification(user_check.firebase_id):             
-                        badge = db.session.query(notific.notific_id).filter(notific.n_u_id==user_check.u_id).filter(notific.notific_seen==False).count()
-                        push(user_check.device_arn, badge, cont, subj)
+                inNot = inNotification(user_check.firebase_id)
+                if inNot == True:
+                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=postID)
+                    firebaseNotification(user_check.firebase_id, cont)
+                if user_check.u_id != myID and user_check.device_arn != 0 and inNot==False and inPID!=postID:             
+                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=postID)
+                    firebaseNotification(user_check.firebase_id, cont)
+                    db.session.commit()
+                    badge = db.session.query(notific.notific_id).filter(notific.n_u_id==user_check.u_id).filter(notific.notific_seen==False).count()
+                    push(user_check.device_arn, badge, cont, subj)        
         result['status'] = 'success'
         result['message'] = 'Posted'
     except Exception, e:
@@ -705,8 +752,8 @@ def getFriendList():
         return json.dumps(result)
     result = {'status':'error', 'message':'No results found'}
     try:
-        chat_subq = db.session.query(users.u_id, users.firebase_id, users.u_handle, users.u_key, chats.send_id, chats.recip_id, chats.messg_cont, chats.date_time).filter(users.u_id != userID).filter(and_(or_(chats.send_id==userID, chats.recip_id==userID)),or_(chats.send_id==users.u_id, chats.recip_id==users.u_id)).distinct().order_by(chats.messg_id.desc()).subquery('c')
-        chat_messg = db.session.query(chat_subq.c.u_id, chat_subq.c.firebase_id, chat_subq.c.u_handle, chat_subq.c.u_key, chat_subq.c.send_id, chat_subq.c.recip_id, chat_subq.c.messg_cont, chat_subq.c.date_time,friends.friend_status,friends.requester).filter(or_(chats.send_id==users.u_id, chats.recip_id==users.u_id)).filter(users.u_id==userID).outerjoin(friends, or_(and_(friends.friend_a==chat_subq.c.u_id, friends.friend_b==userID),and_(friends.friend_b==chat_subq.c.u_id,friends.friend_a==userID))).distinct().group_by(chat_subq.c.send_id * chat_subq.c.recip_id).order_by(chats.messg_id.desc()).limit(DEFAULT_LIMIT)
+        chat_subq = db.session.query(users.u_id, users.firebase_id, users.u_handle, users.u_key, chats.send_id, chats.recip_id, chats.messg_cont, chats.date_time, chats.messg_id).filter(users.u_id != userID).filter(and_(or_(chats.send_id==userID, chats.recip_id==userID)),or_(chats.send_id==users.u_id, chats.recip_id==users.u_id)).distinct().order_by(chats.messg_id.desc()).subquery('c')
+        chat_messg = db.session.query(chat_subq.c.u_id, chat_subq.c.firebase_id, chat_subq.c.u_handle, chat_subq.c.u_key, chat_subq.c.send_id, chat_subq.c.recip_id, chat_subq.c.messg_cont, chat_subq.c.date_time,friends.friend_status,friends.requester, chat_subq.c.messg_id).filter(or_(chats.send_id==users.u_id, chats.recip_id==users.u_id)).filter(users.u_id==userID).outerjoin(friends, or_(and_(friends.friend_a==chat_subq.c.u_id, friends.friend_b==userID),and_(friends.friend_b==chat_subq.c.u_id,friends.friend_a==userID))).distinct().group_by(chat_subq.c.send_id * chat_subq.c.recip_id).order_by(chat_subq.c.messg_id.desc()).limit(DEFAULT_LIMIT)
         friend_list = db.session.query(users.u_id, users.u_name, users.u_handle, users.firebase_id, friends.friend_a, friends.friend_b, friends.requester, friends.friend_status, users.u_key).filter(users.u_id!=userID).filter(or_(users.u_id==friends.friend_a, users.u_id==friends.friend_b)).filter(or_(friends.friend_a==userID,friends.friend_b==userID)).filter(or_(friends.friend_status == 'F',friends.friend_status == 'P')).filter(users.u_name > lastUserName).distinct().order_by(users.u_name).limit(DEFAULT_LIMIT)
         db.session.close()
         result['status']='success'
@@ -716,25 +763,27 @@ def getFriendList():
             result['currentFriends']=groupsFriends['currentFriends']
             result['receivedRequests']=groupsFriends['receivedRequests']
             '''
-            for a in groupsFriends:
-                result[a]=groupsFriends[a]
+            for a in result['currentFriends']:
+                print a['key']
+                print '\n'
             '''
         else:
             result['message']='No Friends Found'
             result['currentFriends']=[]
             result['receivedRequests']=[]
         if chat_messg is not None and chat_messg !=[]:
-            label = ['userID','firebaseID','userHandle','key','senderID','recipID','messageContent','timestamp','isFriend','requester']
+            label = ['userID','firebaseID','userHandle','key','senderID','recipID','messageContent','timestamp','isFriend','requester','messgID']
             result['chats']=add_labels(label, chat_messg,'bucket',PROF_BUCKET, keySize=size)
             for c in result['chats']:
-                print c['messageContent']
+                #print c['messageContent']
                 if c['isFriend']=='B':# and c['requester'] == userID:
                     result['chats'].remove(c)
         else:
             result['chats']=[]
     except Exception, e:
         result = {'status':'error', 'message':'Friend info not retrieved'}
-        #result = {'status':'error', 'message':str(e)}
+        #result['status']='error'
+        #result['message']=str(e)
         pass
     data = json.dumps(result)
     return data
@@ -759,7 +808,7 @@ def searchFriend():
     search_term = '%' + criteria + '%'
     result = {'status':'error', 'message':'No results found'}
     try:
-        search_check = db.session.query(users.u_id,users.u_name, users.u_handle, users.firebase_id, users.u_key, friends.friend_status).filter(or_(users.u_handle.like(search_term), users.u_name.like(search_term))).filter(users.u_id != myID).filter(users.u_name > lastUserID).outerjoin(friends, or_(and_(friends.friend_a==users.u_id, friends.friend_b==myID),and_(friends.friend_b==users.u_id,friends.friend_a==myID))).order_by(users.u_id.asc()).distinct().limit(DEFAULT_LIMIT) #might have issues if a lot of blocked? probably not though
+        search_check = db.session.query(users.u_id,users.u_name, users.u_handle, users.firebase_id, users.u_key, friends.friend_status).filter(or_(users.u_handle.like(search_term), users.u_name.like(search_term))).filter(users.u_id != myID).filter(users.u_name > lastUserID).filter(users.u_private == False).outerjoin(friends, or_(and_(friends.friend_a==users.u_id, friends.friend_b==myID),and_(friends.friend_b==users.u_id,friends.friend_a==myID))).order_by(users.u_id.asc()).distinct().limit(DEFAULT_LIMIT) #might have issues if a lot of blocked? probably not though
         block_check = db.session.query(friends.friend_a, friends.friend_b, friends.requester).filter(or_(friends.friend_a == myID, friends.friend_b == myID)).filter(friends.friend_status=='B').distinct().all()  
         db.session.close()
         if search_check.first() is not None:
@@ -783,8 +832,6 @@ def searchFriend():
                         for r in result['users']:
                             if b==r['userID'] and r['isFriend']=='B':
                                 r['isFriend']='BB'
-                    print block_update
-                    print '\n\n'
                     if search_list == None:
                         result['message'] = 'No Results Found'
                 else:
@@ -800,6 +847,49 @@ def searchFriend():
     data = json.dumps(result)
     return data
 
+@application.route('/getCurrentFriends', methods=['POST'])
+def getCurrentFriends():
+    result = {'status':'error','message':'Invalid request'}
+    if request.method == 'POST':
+        if all (k in request.form for k in ('myID','size','lastUserID','poolID')): 
+            poolID = int(request.form['poolID'])
+            myID = int(request.form['myID'])
+            lastUserID = int(request.form['lastUserID'])
+            if request.form['size'] in ('small','medium','large'):
+                size = request.form['size']
+            else:
+                return json.dumps(result)
+        else:
+            return json.dumps(result)
+    else:
+        return json.dumps(result)
+    result = {'status':'error', 'message':'No results found'}
+    try:
+        search_check = db.session.query(users.u_id,users.u_name, users.u_handle, users.firebase_id, users.u_key, friends.friend_status).filter(or_(users.u_id==friends.friend_a, users.u_id==friends.friend_b)).filter(or_(friends.friend_a==myID, friends.friend_b==myID)).filter(users.u_id != myID).filter(friends.friend_status=='F')
+        if poolID !=0:
+            pool_sub = db.session.query(groupMembers.member_id).filter(groupMembers.group_id==poolID).filter(groupMembers.member_role.in_(('O','H','M'))).distinct().subquery()
+            search_check = search_check.filter(~users.u_id.in_(pool_sub))
+        if lastUserID != 0:
+            search_check = search_check.filter(users.u_name > lastUserID)
+        search_check = search_check.order_by(users.u_name).distinct().limit(DEFAULT_LIMIT)
+        result['status']='success'
+        if search_check is not None and search_check !=[]:
+            groupsFriends = filter_friends(search_check,size)
+            result['currentFriends']=groupsFriends['currentFriends']
+            if result['currentFriends'] != []:
+                result['message']='Friends Found'
+            else:   
+                result['message']='No Friends Found'
+        else:
+            result['message']='No Friends Found'
+            result['currentFriends']=[]
+        db.session.close()
+    except Exception, e:
+        result = {'status':'error', 'message':'Friend info not retrieved'}
+        #result = {'status':'error', 'message':str(e)}
+        pass
+    return json.dumps(result)
+    
 @application.route('/sendFriendRequest', methods=['POST']) #another table with just requests?
 def sendFriendRequest():
     result = {'status':'error','message':'Invalid request'}
@@ -864,16 +954,23 @@ def sendFriendRequest():
                 db.session.commit()
                 result['status']='success'
                 result['message']='Friend request sent'
-                user_check = db.session.query(users.u_handle, users.device_arn, users.firebase_id).filter(users.u_id==requester_ID).one()
+                user_check = db.session.query(users.device_arn, users.firebase_id).filter(users.u_id==friend_ID).one()
+                my_check = db.session.query(users.u_handle).filter(users.u_id==requester_ID).one()
                 subj = 'getFriendList'
-                cont = '@' + user_check.u_handle + ' has sent you a friend request :)'
+                cont = '@' + my_check.u_handle + ' has sent you a friend request :)'
                 notificType = 'D'
                 notificUID = friend_ID
-                result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificOtherID=requester_ID)
+                inNot = inNotification(user_check.firebase_id)
+                if inNot == True:
+                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificOtherID=requester_ID)
+                    firebaseNotification(user_check.firebase_id, cont)
                 if user_check is not None and user_check != []:
                     if user_check.device_arn != 0 and not inNotification(user_check.firebase_id):  
-                        badge = db.session.query(notific.notific_id).filter(notific.n_u_id==requester_ID).filter(notific.notific_seen==False).count()               
-                        push(user_check.device_arn, badge, cont, subj)
+                        result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificOtherID=requester_ID)
+                        firebaseNotification(user_check.firebase_id, cont)
+                        db.session.commit()
+                        badge = db.session.query(notific.notific_id).filter(notific.n_u_id==friend_ID).filter(notific.notific_seen==False).count()               
+                        result['push']=push(user_check.device_arn, badge, cont, subj)
             else:
                 result['status']='error'
                 result['message']='Invalid Request'
@@ -889,24 +986,30 @@ def sendFriendRequest():
             db.session.commit()
             result['status']='success'
             result['message']='Friend request sent'
-            user_check = db.session.query(users.u_handle, users.device_arn, users.firebase_id).filter(users.u_id==requester_ID).one()
+            user_check = db.session.query(users.device_arn, users.firebase_id).filter(users.u_id==friend_ID).one()
+            my_check = db.session.query(users.u_handle).filter(users.u_id==requester_ID).one()
             subj='getFriendList'
-            cont = '@' + user_check.u_handle + ' has sent you a friend request :)'
+            cont = '@' + my_check.u_handle + ' has sent you a friend request :)'
             notificType = 'D'
             notificUID = friend_ID
-            result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificOtherID=requester_ID)
-            firebaseNotification(user_check.firebase_id, cont)
+            inNot = inNotification(user_check.firebase_id)
+            if inNot == True:
+                result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificOtherID=requester_ID)
+                firebaseNotification(user_check.firebase_id, cont)
             if user_check is not None and user_check != []:
-                if user_check.device_arn != 0 and not inNotification(user_check.firebase_id):
-                    badge = db.session.query(notific.notific_id).filter(notific.n_u_id==requester_ID).filter(notific.notific_seen==False).count()
-                    push(user_check.device_arn, badge, cont, subj)
+                if user_check.device_arn != 0 and inNot==False:
+                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificOtherID=requester_ID)
+                    firebaseNotification(user_check.firebase_id, cont)
+                    db.session.commit()
+                    badge = db.session.query(notific.notific_id).filter(notific.n_u_id==friend_ID).filter(notific.notific_seen==False).count()
+                    result['push']=push(user_check.device_arn, badge, cont, subj)
         else:
             result['status']='error'
             result['message']='Invalid Request'
     except Exception, e:
         db.session.rollback()
-        #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'Request not sent'}
+        result = {'status':'error', 'message':str(e)}
+        #result = {'status':'error', 'message':'Request not sent'}
         pass
     finally:
         db.session.close()
@@ -917,16 +1020,16 @@ def sendFriendRequest():
 def getUserProfile():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
-        if all (k in request.form for k in ('myID','userID','limitInfo','lastGroupName')):
+        if all (k in request.form for k in ('myID','userID','limitInfo','lastPoolName')):
             userID = request.form['myID']
             otherID = request.form['userID']
             limitInfo = request.form['limitInfo']
-            lastGroupName = request.form['lastGroupName']
+            lastGroupName = request.form['lastPoolName']
             userPicSize='small'
             groupPicSize='small'
-            if limitInfo == 'no' and all (j in request.form for j in ('userPicSize','groupPicSize')):
-                if request.form['groupPicSize']:
-                    groupPicSize = request.form['groupPicSize']  
+            if limitInfo == 'no' and all (j in request.form for j in ('userPicSize','poolPicSize')):
+                if request.form['poolPicSize']:
+                    groupPicSize = request.form['poolPicSize']  
                 else:
                     return json.dumps(result)              
                 if request.form['userPicSize'] in ('small','medium','large'):
@@ -949,7 +1052,7 @@ def getUserProfile():
             if limitInfo == 'no':
                 result['key'] = userProf_check.u_key+'_'+userPicSize
                 result['bucket'] = PROF_BUCKET
-                other_groups = db.session.query(groupDetails.group_id, groupDetails.group_handle,groupDetails.group_name, groupDetails.group_key,groupDetails.group_city, groupDetails.group_description).filter(groupMembers.member_id==otherID).filter(groupDetails.group_id==groupMembers.group_id).filter(groupMembers.member_role.in_(('M','H','O'))).filter(groupDetails.group_on_profile == True).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name.asc()).limit(DEFAULT_LIMIT)
+                other_groups = db.session.query(groupDetails.group_id, groupDetails.group_handle,groupDetails.group_name, groupDetails.group_key,groupDetails.group_city, groupDetails.group_description).filter(groupDetails.group_active=='Y').filter(groupMembers.member_id==otherID).filter(groupDetails.group_id==groupMembers.group_id).filter(groupMembers.member_role.in_(('M','H','O'))).filter(groupDetails.group_on_profile == True).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name.asc()).limit(DEFAULT_LIMIT)
             else:
                 other_groups = db.session.query(groupDetails.group_id, groupDetails.group_handle,groupDetails.group_name, groupDetails.group_city, groupDetails.group_description).filter(groupMembers.member_id==otherID).filter(groupDetails.group_id==groupMembers.group_id).filter(groupMembers.member_role.in_(('M','H','O'))).filter(groupDetails.group_on_profile == True).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name.asc()).limit(DEFAULT_LIMIT)
             result['userHandle'] = userProf_check.u_handle
@@ -975,13 +1078,13 @@ def getUserProfile():
                         result['key'] = 'default_'+userPicSize
                         result['userName'] = 'default'
             if other_groups is not None and other_groups != []:
-                add_all = 'groupBucket'
+                add_all = 'poolBucket'
                 if limitInfo == 'no':
-                    group_labels = ['groupID','groupHandle','groupName','groupKey','city','groupDescription']
-                    result['groups'] = add_labels(group_labels, other_groups, add_all, GROUP_BUCKET, keySize= groupPicSize)
+                    group_labels = ['poolID','poolHandle','poolName','poolKey','city','poolDescription']
+                    result['pools'] = add_labels(group_labels, other_groups, add_all, GROUP_BUCKET, keySize= groupPicSize)
                 else:
-                    group_labels = ['groupID','groupHandle','groupName','city','groupDescription']
-                    result['groups'] = add_labels(group_labels, other_groups)
+                    group_labels = ['poolID','poolHandle','poolName','city','poolDescription']
+                    result['pools'] = add_labels(group_labels, other_groups)
             else: 
                 result['message'] = 'successfully retrieved profile information. No groups found' 
             if result['isFriend'] != 'F':
@@ -1074,14 +1177,32 @@ def sendChat():
         notificType = 'C'
         notificUID = recipID      
         if recip_check is not None and recip_check != []:
+            #p = Pool(processes=1)              # Start a worker processes.
+            #p.apply_async(notifyChat, [recip_check.device_arn, sendID, recipID, recip_check.firebase_id, subj, cont, notificType, notificUID])
+            #p.close()
             if recip_check.device_arn != 0:
+                inNot = inNotification(recip_check.firebase_id)
+                if inNot==True:
+                   result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificOtherID=sendID)
+                   firebaseNotification(recip_check.firebase_id, cont) 
                 if not checkInChat(sendID, recipID, recip_check.firebase_id): #checkInChat -> true if in chat, false if not. 
-                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificOtherID=sendID)
-                    firebaseNotification(recip_check.firebase_id, cont) 
-                    if not inNotification(recip_check.firebase_id):
+                    if inNot == False:
+                        result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificOtherID=sendID)
+                        firebaseNotification(recip_check.firebase_id, cont)
+                        db.session.commit()
                         badge = db.session.query(notific.notific_id).filter(notific.n_u_id==recipID).filter(notific.notific_seen==False).count()
-                        sendit = push(recip_check.device_arn, badge, cont, subj)
-                        result['push']= sendit
+                        result['push'] = push(recip_check.device_arn, badge, cont, subj)
+                    else:
+                        result['push']='inNotification'
+                else:
+                    result['notificationSent']='inChat'
+                    #result['sendID']=sendID
+                    #result['recipID']=recipID
+                    #result['fbID']=recip_check.firebase_id
+            else:
+                result['test']=recip_check.device_arn
+        else:
+            result['test2']='no recip_check ' + recipID
     except Exception, e:
         #result['message']=str(e)
         #result['status']='error'
@@ -1151,7 +1272,7 @@ def updateMyProfile():
     if request.method == 'POST':
         if all (k in request.form for k in ('myID','action')):
             userID = request.form['myID']
-            action = request.form['action']
+            action = request.form['action'] #only update
             if action =='edit' and all (l in request.form for l in ('myName','myHandle','myDescription','myBirthday','myPhoneNumber','myEmail','isPicSet')):
                 newName = request.form['myName']
                 newHandle = request.form['myHandle']
@@ -1159,7 +1280,10 @@ def updateMyProfile():
                 if request.form['myBirthday'] == 'no birthday set':
                     newBirthday = date(1901,1,1)
                 else:
-                    newBirthday = request.form['myBirthday']
+                    try:
+                        newBirthday = datetime.strptime(request.form['myBirthday'],"%b %d, %Y")
+                    except:
+                        return json.dumps({'status':'error','message':'Invalid Date'})
                 newPhoneNumber = request.form['myPhoneNumber']
                 newEmail = request.form['myEmail'] #check
                 picSet = request.form['isPicSet'] #yes, no, no_change
@@ -1169,16 +1293,16 @@ def updateMyProfile():
     else:
         return json.dumps(result)
     try:
-        email_check = db.session.query(users.u_email).filter(users.u_id != userID).filter(users.u_email==newEmail).all()
-        handle_check = db.session.query(users.u_handle).filter(users.u_id != userID).filter(users.u_handle==newHandle).all()
-        if email_check is not None and email_check !=[]:
-            result = {'status':'error','message':'eMail address already exists'}
-        elif handle_check is not None and email_check !=[]:
-            result = {'status':'error','message':'handle already exists'}
-        else:        
-            user_check = db.session.query(users.u_key).filter(users.u_id==userID).one()
-            if user_check is not None and user_check !=[]:
-                if action == 'edit':
+        if action=='edit':
+            email_check = db.session.query(users.u_email).filter(users.u_id != userID).filter(users.u_email==newEmail).all()
+            handle_check = db.session.query(users.u_handle).filter(users.u_id != userID).filter(users.u_handle==newHandle).all()
+            if email_check is not None and email_check !=[]:
+                result = {'status':'error','message':'eMail address already exists'}
+            elif handle_check is not None and email_check !=[]:
+                result = {'status':'error','message':'handle already exists'}
+            else:        
+                user_check = db.session.query(users.u_key).filter(users.u_id==userID).one()
+                if user_check is not None and user_check !=[]:
                     if picSet == 'yes':
                         if user_check.u_key != 'default':
                             k_1, k_2 =user_check.u_key.split('_',1)
@@ -1213,16 +1337,16 @@ def updateMyProfile():
             result['status']='success'
     except Exception, e:
         db.session.rollback()
-        #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'Profile not updated'}        
+        result = {'status':'error', 'message':str(e)}
+        #result = {'status':'error', 'message':'Profile not updated'}        
         pass
     finally:
         db.session.close()
     data = json.dumps(result)
     return data
 
-@application.route('/getMyGroupPost', methods=['POST'])
-def getMyGroupPost():
+@application.route('/getMyPoolPost', methods=['POST'])
+def getMyPoolPost():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
         if all (k in request.form for k in ('myID','size')):
@@ -1236,31 +1360,35 @@ def getMyGroupPost():
     else:
         return json.dumps(result)
     try:
-        subq = db.session.query(groupPosts.original_post_id).filter(groupPosts.post_u_id == myID).filter(groupPosts.original_post_id != 0).distinct().subquery()
+        subq = db.session.query(groupPosts.original_post_id).filter(groupPosts.post_u_id==myID).filter(groupPosts.original_post_id!=0).distinct().subquery()
+        get_my_posts = db.session.query(groupPosts.group_post_id, users.u_id, users.u_name, users.u_handle, users.firebase_id, users.u_key, groupPosts.group_post_cont, groupMembers.member_role, groupDetails.group_handle, groupPosts.points_count, groupPosts.reply_count, groupPosts.date_time, groupPosts.date_time_edited, groupPostUpvoted.points, groupPosts.original_post_id, groupPosts.group_id, groupPosts.is_pinned).filter(groupPosts.post_u_id==users.u_id).filter(groupMembers.member_id == users.u_id).filter(groupMembers.group_id==groupPosts.group_id).filter(groupDetails.group_id==groupPosts.group_id).filter(or_(and_(groupPosts.original_post_id == 0,groupPosts.post_u_id==myID), groupPosts.group_post_id.in_(subq))).outerjoin(groupPostUpvoted, and_(groupPostUpvoted.post_id==groupPosts.group_post_id, groupPostUpvoted.voter_id==myID)).order_by(groupPosts.group_post_id.desc()).distinct().all()
+        '''
+        subq = db.session.query(groupPosts.group_post_id).filter(groupPosts.post_u_id == myID).filter(groupPosts.original_post_id != 0).distinct().subquery()
         get_my_posts = db.session.query(groupPosts.group_post_id, users.u_id, users.u_name, users.u_handle, users.firebase_id, users.u_key, groupPosts.group_post_cont, groupMembers.member_role, groupDetails.group_handle, groupPosts.points_count, groupPosts.reply_count, groupPosts.date_time, groupPosts.date_time_edited, groupPostUpvoted.points, groupPosts.original_post_id, groupPosts.group_id, groupPosts.is_pinned).filter(groupPosts.post_u_id==users.u_id).filter(groupMembers.member_id == users.u_id).filter(groupMembers.group_id==groupPosts.group_id).filter(groupPosts.post_u_id==myID).filter(groupDetails.group_id==groupPosts.group_id).filter(or_(groupPosts.original_post_id==0, groupPosts.group_post_id.in_(subq))).outerjoin(groupPostUpvoted, and_(groupPostUpvoted.post_id==groupPosts.group_post_id, groupPostUpvoted.voter_id==myID)).distinct().all()
+        '''
         if get_my_posts is not None:    
             result['status'] = 'success'        
             if get_my_posts == []:
                 result['message'] = 'No results found'
             else:
                 result['message'] = 'Results Found'
-                labels = ['postID','userID','userName','userHandle','firebaseID','key','postContent','memberRole', 'groupHandle', 'pointsCount','replyCount','timestamp','timestampEdited','didIVote','cellType','groupID','isPinned']
+                labels = ['postID','userID','userName','userHandle','firebaseID','key','postContent','memberRole', 'poolHandle', 'pointsCount','replyCount','timestamp','timestampEdited','didIVote','cellType','poolID','isPinned']
                 add_all = 'bucket'
-                result['groupPosts'] = add_labels(labels,get_my_posts,add_all,PROF_BUCKET,keySize=size)
+                result['poolPosts'] = add_labels(labels,get_my_posts,add_all,PROF_BUCKET,keySize=size)
     except Exception, e:
-        #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'Posts not found'}    
+        result = {'status':'error', 'message':str(e)}
+        #result = {'status':'error', 'message':'Posts not found'}    
         pass
     data = json.dumps(result)
     return data
 
-@application.route('/getGroupList', methods=['POST'])
-def getGroupList():
+@application.route('/getPoolList', methods=['POST'])
+def getPoolList():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
-        if all (k in request.form for k in ('myID','size', 'lastGroupName')):
+        if all (k in request.form for k in ('myID','size', 'lastPoolName')):
             user_id = request.form['myID']
-            lastGroupName = request.form['lastGroupName']
+            lastGroupName = request.form['lastPoolName']
             if request.form['size'] in ('small','medium','large'):
                 size = request.form['size']
             else:
@@ -1278,16 +1406,16 @@ def getGroupList():
             if k.member_role in ('M','H','O'):
                 new_host_posts = db.session.query(groupPosts.group_post_id).filter(k.group_id == groupPosts.group_id).filter(groupPosts.original_post_id==0).filter(groupPosts.group_post_id > (0 if (k.last_host_post_seen is None) else k.last_host_post_seen)).count()
                 new_posts= db.session.query(groupPosts.group_post_id).filter(k.group_id == groupPosts.group_id).filter(groupPosts.original_post_id==-1).filter(groupPosts.group_post_id > (0 if (k.last_post_seen is None) else k.last_post_seen)).count()
-                new_events = db.session.query(groupEventDetails.event_id).filter(k.group_id == groupEventDetails.group_id).filter(groupEventDetails.event_id > (0 if (k.last_event_seen is None) else k.last_event_seen)).count()
+                new_events = db.session.query(groupEventDetails.event_id).filter(k.group_id == groupEventDetails.group_id).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_id > (0 if (k.last_event_seen is None) else k.last_event_seen)).count()
                 num_host_posts[k.group_id]=new_host_posts if new_host_posts is not None else 0
                 num_posts[k.group_id]=new_posts if new_posts is not None else 0
                 num_events[k.group_id]=new_events if new_events is not None else 0
         groupsFriends = filter_groups(group_list, num_host_posts, num_posts, num_events, keySize=size) 
         if groupsFriends is not None and groupsFriends != {}: 
             result['status']='success'
-            result['message']='Groups Found'       
+            result['message']='Pool Found'       
             result['receivedRequests'] = groupsFriends['receivedRequests']
-            result['currentGroups'] = groupsFriends['currentGroups']   
+            result['currentPools'] = groupsFriends['currentGroups']   
             '''              
             for a in groupsFriends:
                 result[a]=groupsFriends[a]
@@ -1311,7 +1439,7 @@ def getGroupList():
 def searchPool():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
-        if all (k in request.form for k in ('myID','criteria','longitude','latitude','isExact','groupSize','category','size','lastPoolName')):
+        if all (k in request.form for k in ('myID','criteria','longitude','latitude','isExact','poolSize','category','size','lastPoolName')):
             user_id = request.form['myID']
             criteria = request.form['criteria']
             searchLong = float(request.form['longitude'])
@@ -1352,21 +1480,21 @@ def searchPool():
     try: #search by size
         if groupSize in ('large','any'):
             if category == 'all':
-                group_search = db.session.query(groupDetails.group_id, groupDetails.group_handle, groupDetails.group_name, groupDetails.group_num_members, groupDetails.group_key, groupDetails.group_city, groupDetails.group_description, groupDetails.group_invite_only, groupMembers.member_role).filter(groupDetails.group_active=='Y').filter(groupDetails.group_long >= minLong).filter(groupDetails.group_long <= maxLong).filter(groupDetails.group_lat >= minLat).filter(groupDetails.group_lat <= maxLat).filter(groupDetails.group_searchable == True).filter(groupDetails.group_num_members >= minSize).filter(or_(groupDetails.group_handle.like(criteria),groupDetails.group_name.like(criteria),groupDetails.group_description.like(criteria))).outerjoin(groupMembers, and_(groupMembers.group_id==groupDetails.group_id, groupMembers.member_id==user_id)).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name.asc()).distinct().limit(DEFAULT_LIMIT)
+                group_search = db.session.query(groupDetails.group_id, groupDetails.group_handle, groupDetails.group_name, groupDetails.group_num_members, groupDetails.group_key, groupDetails.group_city, groupDetails.group_description, groupDetails.group_invite_only, groupMembers.member_role, groupDetails.group_readable).filter(groupDetails.group_active=='Y').filter(groupDetails.group_long >= minLong).filter(groupDetails.group_long <= maxLong).filter(groupDetails.group_lat >= minLat).filter(groupDetails.group_lat <= maxLat).filter(groupDetails.group_searchable == True).filter(groupDetails.group_num_members >= minSize).filter(or_(groupDetails.group_handle.like(criteria),groupDetails.group_name.like(criteria),groupDetails.group_description.like(criteria))).outerjoin(groupMembers, and_(groupMembers.group_id==groupDetails.group_id, groupMembers.member_id==user_id)).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name.asc()).distinct().limit(DEFAULT_LIMIT)
             else:
-                group_search = db.session.query(groupDetails.group_id, groupDetails.group_handle, groupDetails.group_name, groupDetails.group_num_members, groupDetails.group_key, groupDetails.group_city, groupDetails.group_description, groupDetails.group_invite_only, groupMembers.member_role).filter(groupDetails.group_active=='Y').filter(groupDetails.group_long >= minLong).filter(groupDetails.group_long <= maxLong).filter(groupDetails.group_lat >= minLat).filter(groupDetails.group_lat <= maxLat).filter(groupDetails.group_searchable == True).filter(groupDetails.group_num_members >= minSize).filter(groupDetails.group_category ==category).filter(or_(groupDetails.group_handle.like(criteria),groupDetails.group_name.like(criteria),groupDetails.group_description.like(criteria))).outerjoin(groupMembers, and_(groupMembers.group_id==groupDetails.group_id, groupMembers.member_id==user_id)).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name.asc()).distinct().limit(DEFAULT_LIMIT)
+                group_search = db.session.query(groupDetails.group_id, groupDetails.group_handle, groupDetails.group_name, groupDetails.group_num_members, groupDetails.group_key, groupDetails.group_city, groupDetails.group_description, groupDetails.group_invite_only, groupMembers.member_role, groupDetails.group_readable).filter(groupDetails.group_active=='Y').filter(groupDetails.group_long >= minLong).filter(groupDetails.group_long <= maxLong).filter(groupDetails.group_lat >= minLat).filter(groupDetails.group_lat <= maxLat).filter(groupDetails.group_searchable == True).filter(groupDetails.group_num_members >= minSize).filter(groupDetails.group_category ==category).filter(or_(groupDetails.group_handle.like(criteria),groupDetails.group_name.like(criteria),groupDetails.group_description.like(criteria))).outerjoin(groupMembers, and_(groupMembers.group_id==groupDetails.group_id, groupMembers.member_id==user_id)).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name.asc()).distinct().limit(DEFAULT_LIMIT)
         else: #small or medium
             if category == 'all':
-                group_search = db.session.query(groupDetails.group_id, groupDetails.group_handle, groupDetails.group_name, groupDetails.group_num_members, groupDetails.group_key, groupDetails.group_city, groupDetails.group_description, groupDetails.group_invite_only, groupMembers.member_role).filter(groupDetails.group_active=='Y').filter(groupDetails.group_long >= minLong).filter(groupDetails.group_long <= maxLong).filter(groupDetails.group_lat >= minLat).filter(groupDetails.group_lat <= maxLat).filter(groupDetails.group_searchable == True).filter(groupDetails.group_num_members >= minSize).filter(groupDetails.group_num_members <= maxSize).filter(or_(groupDetails.group_handle.like(criteria),groupDetails.group_name.like(criteria),groupDetails.group_description.like(criteria))).outerjoin(groupMembers, and_(groupMembers.group_id==groupDetails.group_id, groupMembers.member_id==user_id)).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name).distinct().limit(DEFAULT_LIMIT)
+                group_search = db.session.query(groupDetails.group_id, groupDetails.group_handle, groupDetails.group_name, groupDetails.group_num_members, groupDetails.group_key, groupDetails.group_city, groupDetails.group_description, groupDetails.group_invite_only, groupMembers.member_role, groupDetails.group_readable).filter(groupDetails.group_active=='Y').filter(groupDetails.group_long >= minLong).filter(groupDetails.group_long <= maxLong).filter(groupDetails.group_lat >= minLat).filter(groupDetails.group_lat <= maxLat).filter(groupDetails.group_searchable == True).filter(groupDetails.group_num_members >= minSize).filter(groupDetails.group_num_members <= maxSize).filter(or_(groupDetails.group_handle.like(criteria),groupDetails.group_name.like(criteria),groupDetails.group_description.like(criteria))).outerjoin(groupMembers, and_(groupMembers.group_id==groupDetails.group_id, groupMembers.member_id==user_id)).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name).distinct().limit(DEFAULT_LIMIT)
             else:
-                group_search = db.session.query(groupDetails.group_id, groupDetails.group_handle, groupDetails.group_name, groupDetails.group_num_members, groupDetails.group_key, groupDetails.group_city, groupDetails.group_description, groupDetails.group_invite_only, groupMembers.member_role).filter(groupDetails.group_active=='Y').filter(groupDetails.group_long >= minLong).filter(groupDetails.group_long <= maxLong).filter(groupDetails.group_lat >= minLat).filter(groupDetails.group_lat <= maxLat).filter(groupDetails.group_searchable == True).filter(groupDetails.group_num_members >= minSize).filter(groupDetails.group_num_members <= maxSize).filter(groupDetails.group_category == category).filter(or_(groupDetails.group_handle.like(criteria),groupDetails.group_name.like(criteria),groupDetails.group_description.like(criteria))).outerjoin(groupMembers, and_(groupMembers.group_id==groupDetails.group_id, groupMembers.member_id==user_id)).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name).distinct().limit(DEFAULT_LIMIT)
+                group_search = db.session.query(groupDetails.group_id, groupDetails.group_handle, groupDetails.group_name, groupDetails.group_num_members, groupDetails.group_key, groupDetails.group_city, groupDetails.group_description, groupDetails.group_invite_only, groupMembers.member_role, groupDetails.group_readable).filter(groupDetails.group_active=='Y').filter(groupDetails.group_long >= minLong).filter(groupDetails.group_long <= maxLong).filter(groupDetails.group_lat >= minLat).filter(groupDetails.group_lat <= maxLat).filter(groupDetails.group_searchable == True).filter(groupDetails.group_num_members >= minSize).filter(groupDetails.group_num_members <= maxSize).filter(groupDetails.group_category == category).filter(or_(groupDetails.group_handle.like(criteria),groupDetails.group_name.like(criteria),groupDetails.group_description.like(criteria))).outerjoin(groupMembers, and_(groupMembers.group_id==groupDetails.group_id, groupMembers.member_id==user_id)).filter(groupDetails.group_name > lastGroupName).order_by(groupDetails.group_name).distinct().limit(DEFAULT_LIMIT)
         '''
         count is not working right. need to figure a way to append them. maybe iterate through or add something? second query, not sure if there's a way to ensure accuracy
 
         '''
         if group_search.first() is not None and group_search !=[]:        
             blocked_search = db.session.query(groupDetails.group_id).filter(groupMembers.member_id == user_id).filter(groupMembers.group_id==groupDetails.group_id).filter(groupMembers.member_role=='B').all()
-            label = ['groupID','groupHandle','groupName','membersCount','groupKey','city','groupDescription','inviteOnly','memberRole','upcomingEventsCount']             
+            label = ['poolID','poolHandle','poolName','membersCount','poolKey','city','poolDescription','inviteOnly','memberRole','readable','upcomingChaptersCount']             
             if blocked_search != []:
                 group_list = []
                 for k in group_search:
@@ -1378,7 +1506,7 @@ def searchPool():
                     if (bl): #append upcoming events count
                         for j in k:
                             temp2.append(j)                  
-                        count = (db.session.query(groupEventDetails.event_id).filter(groupEventDetails.group_id == k.group_id).filter(groupEventDetails.event_start > datetime.now()).distinct().count())
+                        count = (db.session.query(groupEventDetails.event_id).filter(groupEventDetails.group_id == k.group_id).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_start > datetime.now()).distinct().count())
                         temp2.append(count)
                         group_list.append(temp2)
             else:
@@ -1388,7 +1516,7 @@ def searchPool():
                     temp2=[]                  
                     for i in range(len(k)):
                         temp2.append(k[i])                
-                    count =  (db.session.query(groupEventDetails.event_id).filter(groupEventDetails.group_id == k.group_id).filter(groupEventDetails.event_start > datetime.now()).distinct().count())
+                    count =  (db.session.query(groupEventDetails.event_id).filter(groupEventDetails.group_id == k.group_id).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_start > datetime.now()).distinct().count())
                     temp2.append(count)
                     temp.append(temp2)
                 group_list=temp
@@ -1397,13 +1525,13 @@ def searchPool():
         db.session.close()
         result['status']='success'
         if group_list != []:
-            result['message']='Groups Found'
-            result['groups']=add_labels(label, group_list,'groupBucket',GROUP_BUCKET,keySize=size)
+            result['message']='Pools Found'
+            result['pools']=add_labels(label, group_list,'poolBucket',GROUP_BUCKET,keySize=size)
         else:
-            result['message']='No Groups Found'
+            result['message']='No Pools Found'
     except Exception, e:
-        #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'Groups not found'}        
+        result = {'status':'error', 'message':str(e)}
+        #result = {'status':'error', 'message':'Pools not found'}        
         pass
     data = json.dumps(result)
     return data
@@ -1412,7 +1540,7 @@ def searchPool():
 def createPool():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
-        if all (k in request.form for k in ('myID','groupName','groupHandle','latitude','longitude','city','poolDescription','isPicSet','searchable','onProfile','readable','inviteOnly','category')):
+        if all (k in request.form for k in ('myID','poolName','poolHandle','latitude','longitude','city','poolDescription','isPicSet','searchable','onProfile','readable','inviteOnly','category')):
             userID = request.form['myID']
             groupName = request.form['poolName']
             groupHandle = request.form['poolHandle']
@@ -1456,7 +1584,7 @@ def createPool():
             db.session.commit()
         else:
             result['status'] = 'Error'
-            result['message'] = 'Group registration error'
+            result['message'] = 'Pool registration error'
             db.session.rollback()
             pass
         try:
@@ -1466,7 +1594,7 @@ def createPool():
             result['largePoolKey'] = 'default_large'
             result['poolBucket']= GROUP_BUCKET
             if picSet == 'yes':
-                file_name=str(group_check_2.group_id)+'_groupPic'
+                file_name=str(group_check_2.group_id)+'_poolPic'
                 key = file_name
                 db.session.query(groupDetails.group_key).filter(groupDetails.group_id==group_check_2.group_id).update({"group_key":key})
                 db.session.commit()
@@ -1492,12 +1620,12 @@ def createPool():
     return data
 
 @application.route('/getPoolProfile', methods=['POST'])
-def getGroupProfile():
+def getPoolProfile():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
         if all (k in request.form for k in ('myID','poolID','lastPostID','userPicSize','poolPicSize')):
             userID = request.form['myID']
-            groupID = request.form['groupID']
+            groupID = request.form['poolID']
             lastPostID = request.form['lastPostID']
             if request.form['userPicSize'] in ['small','medium','large'] and request.form['poolPicSize'] in ['small','medium','large']:
                 userPicSize = request.form['userPicSize']
@@ -1520,14 +1648,14 @@ def getGroupProfile():
             result['status']='success'
             result['message']='No Pools Found'
         elif group_search != []:
-            result['upcomingMomentsCount']=db.session.query(groupEventDetails.event_id).filter(groupEventDetails.group_id == groupID).filter(groupEventDetails.event_start > datetime.now()).distinct().count()
+            result['upcomingChaptersCount']=db.session.query(groupEventDetails.event_id).filter(groupEventDetails.group_id == groupID).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_start > datetime.now()).distinct().count()
             if group_search[0].member_role in ('O','H'):
                 result['poolsRequestsCount']=db.session.query(groupMembers.member_id).filter(groupMembers.group_id == groupID).filter(groupMembers.member_role == 'S').distinct().count()
             else:
                 result['poolRequestsCount']=-1
             #if group is public do something else
             result['message']='Pool found'
-            label = ['groupID', 'poolHandle', 'poolName', 'poolKey', 'city', 'poolDescription', 'membersCount', 'inviteOnly', 'searchable', 'readable', 'onProfile', 'memberRole','longitude','latitude','category']
+            label = ['poolID', 'poolHandle', 'poolName', 'poolKey', 'city', 'poolDescription', 'membersCount', 'inviteOnly', 'searchable', 'readable', 'onProfile', 'memberRole','longitude','latitude','category']
             result['poolInfo']=add_labels(label, group_search,'poolBucket',GROUP_BUCKET, keySize=groupPicSize)
             #print result['groupInfo']
             #get most recent host post and regular group posts   
@@ -1539,7 +1667,7 @@ def getGroupProfile():
             postLabel = ['postID','userID','firebaseID','memberRole','userName','userHandle','key','timestamp','timestampEdited','postContent','replyCount','pointsCount','didIVote']    
             if hostPostSearch is not None and hostPostSearch != [] and postSearch is not None and postSearch != []:
                 result['hostPost']=add_labels(hostPostLabel,hostPostSearch, 'bucket', PROF_BUCKET, keySize=userPicSize)                
-                result['groupPosts'] = add_labels(postLabel, postSearch,'bucket',PROF_BUCKET, keySize=userPicSize)
+                result['poolPosts'] = add_labels(postLabel, postSearch,'bucket',PROF_BUCKET, keySize=userPicSize)
                 result['status']='success'
                 result['message']='Pool Found. Posts Found'    
                 db.session.query(groupMembers.last_host_post_seen, groupMembers.last_post_seen).filter(groupMembers.member_id==userID, groupMembers.group_id==groupID).update({'last_host_post_seen':hostPostSearch.group_post_id,'last_post_seen':postSearch[0].group_post_id})
@@ -1549,7 +1677,7 @@ def getGroupProfile():
                 result['status']='success'
                 db.session.query(groupMembers.last_host_post_seen, groupMembers.last_post_seen).filter(groupMembers.member_id==userID, groupMembers.group_id==groupID).update({'last_host_post_seen':hostPostSearch.group_post_id})
             elif postSearch is not None and postSearch != [] and not (hostPostSearch is not None and hostPostSearch != []): 
-                result['groupPosts'] = add_labels(postLabel, postSearch,'bucket',PROF_BUCKET, keySize=userPicSize)
+                result['poolPosts'] = add_labels(postLabel, postSearch,'bucket',PROF_BUCKET, keySize=userPicSize)
                 result['status']='success'
                 result['message']='Group Found. Post Found'
                 db.session.query(groupMembers.last_host_post_seen, groupMembers.last_post_seen).filter(groupMembers.member_id==userID, groupMembers.group_id==groupID).update({'last_post_seen':postSearch[0].group_post_id})
@@ -1568,13 +1696,13 @@ def getGroupProfile():
     data = json.dumps(result)
     return data
 
-@application.route('/sendGroupPost', methods=['POST'])
-def sendGroupPost():
+@application.route('/sendPoolPost', methods=['POST'])
+def sendPoolPost():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
         if all (k in request.form for k in ('myID','poolID', 'postContent', 'postID')):
             myID = request.form['myID']
-            groupID = request.form['poolID']
+            groupID = int(request.form['poolID'])
             originalPostID = int(request.form['postID']) #checking on client side
             messgCont = request.form['postContent']
         else:
@@ -1587,19 +1715,53 @@ def sendGroupPost():
         db.session.add(data_entered)
         db.session.flush()
         result['postID']=data_entered.group_post_id
-        if originalPostID not in (0,-1):
+        my_check = db.session.query(users.u_handle).filter(users.u_id==myID).one()
+        pool_num = db.session.query(groupDetails.group_num_members).filter(groupDetails.group_id==groupID).one()
+        if (pool_num.group_num_members <= 5) and originalPostID==-1: #notify everyone in pool except you
+            user_check = db.session.query(users.u_id, users.u_handle, users.device_arn, users.firebase_id, groupDetails.group_handle).filter(groupDetails.group_id==groupMembers.group_id).filter(users.u_id == groupMembers.member_id).filter(groupMembers.group_id==groupID).filter(users.u_id != myID).filter(groupMembers.member_role.in_(('M','H','O'))).all()
+            #p = Pool(processes=1)              # Start a worker processes.
+            #p.apply_async(notifyPool, [user_check, my_check.u_handle, messgCont, originalPostID, groupID, myID])
+            #p.close()
+            for u in user_check:
+                if u is not None and u != [] and u.u_id != myID:
+                    subj = 'getPoolPost'
+                    cont = '.' + u.group_handle + ', @' + my_check.u_handle +': ' + messgCont
+                    notificType = 'G'
+                    notificUID = u.u_id
+                    inNot = inNotification(u.firebase_id)
+                    if inNot == True:
+                        result['notificationSent' + str(u.u_id)]=logNotification(notificUID, cont, subj, notificType, notificPostID=originalPostID, notificGroupID=groupID)
+                        firebaseNotification(u.firebase_id, cont)
+                    inPo = inPool(u.firebase_id)
+                    #result['inPool' + str(u.u_id)] = inPo
+                    #result['inPool' + str(u.u_id) + '_check1']= (inPo!=groupID)
+                    #result['inPool' + str(u.u_id) + '_check2']= (inPo>=0)
+                    #result['inNot' + str(u.u_id) + '_check']= (inNot==False)
+                    #result['inNotification' + str(u.u_id)] = inNot
+                    if u.device_arn != 0 and (inNot==False) and (inPo!=groupID) and inPo>=0:  
+                        result['notificationSent' + str(u.u_id)]=logNotification(notificUID, cont, subj, notificType, notificPostID=originalPostID, notificGroupID=groupID)
+                        firebaseNotification(u.firebase_id, cont)  
+                        db.session.commit()
+                        badge = db.session.query(notific.notific_id).filter(notific.n_u_id==u.u_id).filter(notific.notific_seen==False).count()
+                        push(u.device_arn, badge, cont, subj)
+        elif originalPostID not in (0,-1):
             db.session.query(groupPosts.reply_count).filter(groupPosts.group_post_id==originalPostID).update({'reply_count':groupPosts.reply_count + 1})
-            my_check = db.session.query(users.u_handle).filter(users.u_id==myID).one()
             user_check = db.session.query(users.u_id, users.u_handle, users.device_arn, users.firebase_id, groupPosts.original_post_id).filter(users.u_id==groupPosts.post_u_id).filter(groupPosts.group_post_id == originalPostID).one()
+            inPID = inPostID(user_check.firebase_id) # inPostID == parentPostID, do NOT send push. 
             if int(user_check.u_id) != int(myID):
                 subj = 'getPoolPost'
                 cont = '@' + my_check.u_handle + ' replied to your ' + ('host' if user_check.original_post_id == 0 else 'pool') + ' post: ' + messgCont
                 notificType = 'G'
                 notificUID = user_check.u_id
-                result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=originalPostID, notificGroupID=groupID)
-                firebaseNotification(user_check.firebase_id, cont)
-                if user_check is not None and user_check != [] and user_check.u_id != myID:
-                    if user_check.device_arn != 0 and not inNotification(user_check.firebase_id):
+                inNot = inNotification(user_check.firebase_id)
+                if inNot == True:
+                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=originalPostID, notificGroupID=groupID)
+                    firebaseNotification(user_check.firebase_id, cont)
+                if user_check is not None and user_check != [] and user_check.u_id != myID and inPID!=originalPostID:
+                    if user_check.device_arn != 0 and inNot == False:
+                        result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=originalPostID, notificGroupID=groupID)
+                        firebaseNotification(user_check.firebase_id, cont)
+                        db.session.commit()
                         badge = db.session.query(notific.notific_id).filter(notific.n_u_id==user_check.u_id).filter(notific.notific_seen==False).count()
                         push(user_check.device_arn, badge, cont, subj)
         db.session.commit()
@@ -1617,7 +1779,7 @@ def sendGroupPost():
     return data
 
 @application.route('/getPoolPost', methods=['POST'])
-def getGroupPost():
+def getPoolPost():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
         if all (k in request.form for k in ('myID','postID','size','lastPostID','poolID')):
@@ -1691,6 +1853,8 @@ order_by(groupPosts.group_post_id.desc()).distinct().limit(DEFAULT_LIMIT)
                 else:
                     result['status'] = 'error'
                     result['message'] = 'Error Retrieving Posts'
+        else:
+            result['myMemberRole']='N'
         db.session.close()
         result['status']='success'
     except Exception, e:
@@ -1700,7 +1864,7 @@ order_by(groupPosts.group_post_id.desc()).distinct().limit(DEFAULT_LIMIT)
     return json.dumps(result)
     
 @application.route('/updatePool', methods=['POST'])
-def updateGroup():
+def updatePool():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
         if all (k in request.form for k in ('myID','poolID','action')):
@@ -1795,22 +1959,22 @@ def updateGroup():
 #add members to group
 #add members to event (invite only?), edit event, disable?
 
-@application.route('/createMoment', methods=['POST']) #key and handle??
-def createMoment():
+@application.route('/createChapter', methods=['POST']) #key and handle??
+def createChapter():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
-        if all (k in request.form for k in ('myID','poolID','momentName','momentDescription','timestampMomentStart')):
+        if all (k in request.form for k in ('myID','poolID','chapterName','chapterDescription','timestampChapterStart')):
             userID = request.form['myID']
             groupID = request.form['poolID']
-            eventName = request.form['momentName']
-            eventDescription = request.form['momentDescription']
+            eventName = request.form['chapterName']
+            eventDescription = request.form['chapterDescription']
             try:
-                eventStart = datetime.strptime(request.form['timestampMomentStart'],"%b %d, %Y")
+                eventStart = datetime.strptime(request.form['timestampChapterStart'],"%b %d, %Y")
             except:
                 return json.dumps({'status':'error','message':'Invalid Date'})
-            if 'timestampMomentEnd' in request.form:
+            if 'timestampChapterEnd' in request.form:
                 try:
-                    eventEnd = datetime.strptime(request.form['timestampMomentEnd'],"%b %d, %Y")
+                    eventEnd = datetime.strptime(request.form['timestampChapterEnd'],"%b %d, %Y")
                 except:
                     return json.dumps({'status':'error','message':'Invalid Date'})                
             else:
@@ -1822,14 +1986,14 @@ def createMoment():
     data_entered = groupEventDetails(group_id=groupID, event_name=eventName, event_description=eventDescription, event_start=eventStart, event_end=eventEnd)
     result={'status':'error','message':'Momen t already registered'}
     try:
-        event_check = db.session.query(groupEventDetails).filter(groupEventDetails.group_id==groupID).filter(groupEventDetails.event_name==eventName, groupEventDetails.event_description==eventDescription).filter(groupEventDetails.event_start==eventStart).filter(groupEventDetails.event_end==eventEnd).all()
+        event_check = db.session.query(groupEventDetails).filter(groupEventDetails.group_id==groupID).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_name==eventName, groupEventDetails.event_description==eventDescription).filter(groupEventDetails.event_start==eventStart).filter(groupEventDetails.event_end==eventEnd).all()
         if event_check is None or event_check == []:
             member_check = db.session.query(groupMembers.member_role).filter(groupMembers.member_id==userID).filter(groupMembers.group_id==groupID).filter(groupMembers.member_role.in_(('M','H','O')))
             if member_check.first() is not None and member_check != [] and member_check[0].member_role in ('O','H'):
                 try:            
                     db.session.add(data_entered)
                     db.session.commit()
-                    result['momentID']=data_entered.event_id
+                    result['chapterID']=data_entered.event_id
                     eventUserData = groupEventUsers(data_entered.event_id, userID, 'W')
                     db.session.add(eventUserData)       
                     result['status'] = 'success'
@@ -1844,10 +2008,10 @@ def createMoment():
             else:
                 result={'status':'error','message':'Unauthorized'}
         else:
-            result = {'status':'error','message':' Please check to make sure the moment does not already exist'}
+            result = {'status':'error','message':' Please check to make sure the chapter does not already exist'}
     except Exception, e:
         db.session.rollback()
-        result = {'status':'error', 'message':'moment not created'}
+        result = {'status':'error', 'message':'chapter not created'}
         #result = {'status':'error', 'message':str(e)}
         pass    
     finally:
@@ -1856,23 +2020,23 @@ def createMoment():
     data = json.dumps(result)
     return data
 
-@application.route('/updateMoment', methods=['POST'])
-def updateMoment():
+@application.route('/updateChapter', methods=['POST'])
+def updateChapter():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
-        if all (k in request.form for k in ('myID','momentID','poolID','momentName','momentDescription','timestampMomentStart')):
+        if all (k in request.form for k in ('myID','chapterID','poolID','chapterName','chapterDescription','timestampChapterStart')):
             userID = request.form['myID']
-            eventID = request.form['momentID']
+            eventID = request.form['chapterID']
             groupID = request.form['poolID']
-            eventName = request.form['momentName']
-            eventDescription = request.form['momentDescription']
+            eventName = request.form['chapterName']
+            eventDescription = request.form['chapterDescription']
             try:
-                eventStart = datetime.strptime(request.form['timestampMomentStart'],"%b %d, %Y")
+                eventStart = datetime.strptime(request.form['timestampChapterStart'],"%b %d, %Y")
             except:
                 return json.dumps({'status':'error','message':'Invalid Date'})
-            if 'timestampMomentEnd' in request.form:
+            if 'timestampChapterEnd' in request.form:
                 try:
-                    eventEnd = datetime.strptime(request.form['timestampMomentEnd'],"%b %d, %Y")
+                    eventEnd = datetime.strptime(request.form['timestampChapterEnd'],"%b %d, %Y")
                 except:
                     return json.dumps({'status':'error','message':'Invalid Date'})                
             else:
@@ -1884,17 +2048,17 @@ def updateMoment():
     try:
         member_check = db.session.query(groupMembers.member_role).filter(groupMembers.member_id==userID).filter(groupMembers.group_id==groupID).filter(groupMembers.member_role.in_(('O','H')))
         if member_check.one() is not None:
-            db.session.query(groupEventDetails).filter(groupEventDetails.event_id==eventID).update({'event_name':eventName,'event_description':eventDescription,'event_start':eventStart,'event_end':eventEnd})
+            db.session.query(groupEventDetails).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_id==eventID).update({'event_name':eventName,'event_description':eventDescription,'event_start':eventStart,'event_end':eventEnd})
             db.session.commit()
             result['status'] = 'success'
-            result['message'] = 'Moment updated'
+            result['message'] = 'Chapter updated'
         else:
             result['status'] = 'error'
-            result['message'] = 'Moment not updated'
+            result['message'] = 'Chapter not updated'
     except Exception, e:
         db.session.rollback()
         #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'Moment not updated'}        
+        result = {'status':'error', 'message':'Chapter not updated'}        
         pass    
     finally:
         db.session.close()
@@ -1911,45 +2075,71 @@ def pinToScrapBook():
             postID = int(request.form['postID'])
             postContent = request.form['postContent']
             pinID = 0
+            hasPin=False
+            imageKey = 'default'
             if request.form['action'] == 'pin':
-                pin = 'P'
+                pin = True
+                addNew = True
             elif request.form['action'] == 'unpin':
-                pin = 'U'
+                pin = False
+                addNew = False
             else:
                 return json.dumps(result)
-            if request.form['postType'] in ('pond','anon','pool','momentText', 'momentImage'):
+            if request.form['postType'] in ('pond','anon','pool','chapterText', 'chapterImage','host'):
                 postType = request.form['postType']
                 if postType == 'pond':
                     postType = 'F'
                 elif postType == 'anon':
                     postType = 'A'
-                elif postType == 'pool':
+                elif postType in ('pool','host'):
                     postType = 'G'
-                elif postType == 'momentText':
+                elif postType == 'chapterText':
                     postType = 'M'
-                elif postType == 'momentImage':
+                elif postType == 'chapterImage':
                     postType = 'I'
                     if 'imageKey' in request.form:
                         imageKey = request.form['imageKey']
+                        if imageKey[len(imageKey)-6:] == '_small': #_small
+                            imageKey = imageKey[:len(imageKey)-6]
+                        elif imageKey[len(imageKey)-7:] == '_medium': #_medium
+                            imageKey = imageKey[:len(imageKey)-6]
+                        elif imageKey[len(imageKey)-6:] == '_large': #_large
+                            imageKey = imageKey[:len(imageKey)-6]
                     else: 
                         return json.dumps(result)
                 else:
                     imageKey = 'default'          
             else:
                 return json.dumps(result)
+        elif all (l in request.form for l in ('myID','pinID','action')): 
+            userID = request.form['myID']
+            pinID = int(request.form['pinID'])
+            action = request.form['action']        
+            addNew = False
+            if action == 'unpin':
+                pin = False
+            else:
+                pin = True
+            hasPin=True
         elif all (j in request.form for j in ('myID','pinID','replyContent')):
             userID = request.form['myID']
-            pinID = request.form['pinID']
+            pinID = int(request.form['pinID'])
             postContent = request.form['replyContent']
             postType = 'R'
             postID = None
             imageKey = 'default'
             pin = 'R'
+            hasPin = False
+            addNew = True
         else:
             return json.dumps(result)
     else:
         return json.dumps(result)
     try:
+        if (hasPin):
+            type_check = db.session.query(pinnedPosts.pin_type, pinnedPosts.pin_post_id).filter(pinnedPosts.pin_id==pinID).first()
+            postID=type_check.pin_post_id
+            postType=type_check.pin_type
         if postType == 'F':
             post_check = db.session.query(forumPosts.is_pinned).filter(forumPosts.post_id==postID).filter(forumPosts.post_u_id==userID)
         elif postType == 'A':
@@ -1958,35 +2148,52 @@ def pinToScrapBook():
             post_check = db.session.query(groupPosts.is_pinned).filter(groupPosts.group_post_id==postID).filter(groupPosts.post_u_id==userID)
         elif postType in ('M','I'):
             post_check = db.session.query(groupEventPosts.is_pinned).filter(groupEventPosts.group_event_post_id==postID).filter(groupEventPosts.group_event_post_u_id==userID)
-        if post_check.first() is not None and post_check != []:
-            post_check.update({'is_pinned':pin})
-            if pin == 'U':
-                db.session.query(pinnedPosts.is_pinned).filter(pinnedPosts.pin_post_id==postID).filter(pinnedPosts.pin_type==postType).update({'is_pinned':False})
-            result['status'] = 'success'
-            result['message'] = ('Post pinned' if pin == 'P' else 'Post un-pinned')
-        data_entered = pinnedPost(u_id = userID, pin_type = postType, pin_post_orig_cont = postContent, pin_post_id = postID, original_post_id=pinID, image_key = imageKey)
+        if postType!='R' and post_check.first() is not None and post_check != []:
+            post_check.update({'is_pinned':pin}) #update original post
+            if pin == False or (not addNew and pin): #if i have to unpin, a pinnedpost entry exists already. edit it.
+                db.session.query(pinnedPosts.is_pinned).filter(pinnedPosts.pin_post_id==postID).filter(pinnedPosts.pin_type==postType).update({'is_pinned':pin})
+            result['message'] = ('Post pinned' if pin else 'Post un-pinned')
+        if pinID == 0 and pin==True:
+            pin_check = db.session.query(pinnedPosts).filter(pinnedPosts.pin_post_id==postID).filter(pinnedPosts.pin_type==postType).filter(pinnedPosts.original_post_id==pinID).filter(pinnedPosts.u_id==userID).filter(pinnedPosts.is_pinned==False)
+            if pin_check.first() is not None:
+                pin_check.update({'pin_post_orig_cont':postContent, 'image_key':imageKey, 'is_pinned':True, 'date_time_edited':datetime.now()})
+                addNew = False
+        if addNew:
+            data_entered = pinnedPosts(u_id = userID, pin_type = postType, pin_post_orig_cont = postContent, pin_post_id = postID, original_post_id=pinID, image_key = imageKey)
+            db.session.add(data_entered)
+            if postType == 'R':
+                db.session.query(pinnedPosts.reply_count).filter(pinnedPosts.pin_id==pinID).update({'reply_count':pinnedPosts.reply_count+1})
         result['status'] = 'success'
         if postType == 'R':
             result['message'] = 'Reply sent'
-        db.session.add(data_entered)
         db.session.commit()
         if postType == 'R':  
-            user_check = db.session.query(pinnedPosts.u_id, users.u_handle, users.device_arn, users.firebase_id).filter(users.u_id==pinnedPosts.u_id).filter(pinnedPosts.pin_id == pinID).first()
-            if int(pin_check.u_id) != int(userID):    
+            user_check = db.session.query(pinnedPosts.u_id, pinnedPosts.pin_type, users.u_handle, users.device_arn, users.firebase_id).filter(users.u_id==pinnedPosts.u_id).filter(pinnedPosts.pin_id == pinID).first()
+            inPID = inPostID(user_check.firebase_id) # inPostID == parentPostID, do NOT send push. 
+            if int(user_check.u_id) != int(userID) and inPID!=pinID:    
                 my_check = db.session.query(users.u_handle).filter(users.u_id==userID).one()        
-                cont = '@' + my_check.u_handle + ' replied to your ScrapBook post: ' + postCont
+                cont = '@' + my_check.u_handle + ' replied to your scrapook entry: ' + postContent
                 subj = 'getScrapBook'
-                notificType = 'S'
-                notificUID = pin_check.u_id
-                result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=postID)      
-                firebaseNotification(user_check.firebase_id, cont)
+                if user_check.pin_type=='I':
+                    notificType = 'T'
+                else:    
+                    notificType = 'S'
+                notificUID = user_check.u_id
+                inNot = inNotification(user_check.firebase_id)
+                if inNot == True:
+                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=pinID)      
+                    firebaseNotification(user_check.firebase_id, cont)
                 if user_check is not None and user_check != [] and user_check.u_id != userID:
-                    if user_check.device_arn != 0 and not inNotification(user_check.firebase_id):             
+                    if user_check.device_arn != 0 and inNot == False:         
+                        result['notificationSent']=logNotification(notificUID, cont, subj, notificType, notificPostID=pinID)      
+                        firebaseNotification(user_check.firebase_id, cont)
+                        db.session.commit()    
                         badge = db.session.query(notific.notific_id).filter(notific.n_u_id==user_check.u_id).filter(notific.notific_seen==False).count()
                         push(user_check.device_arn, badge, cont, subj)
-        pin_check = db.session.query(pinnedPosts.pin_id).filter(pinnedPosts.u_id==userID).filter(pinnedPosts.pin_type == postType).order_by(pinnedPosts.pin_id.desc()).first()
-        if pin_check is not None and pin_check!=[]:
-            result['pinID'] = pin_check[0].pin_id
+        last_pin_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.pin_post_id).filter(pinnedPosts.u_id==userID).filter(pinnedPosts.pin_type == postType).order_by(pinnedPosts.date_time_edited.desc()).first()
+        if last_pin_check is not None and last_pin_check!=[]:
+            result['pinID'] = last_pin_check.pin_id
+            result['postID'] = last_pin_check.pin_post_id
         else:
             result = {'status':'error', 'message':'Post not pinned'}
     except Exception, e:
@@ -2003,322 +2210,86 @@ def getScrapBook():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
         if all (k in request.form for k in ('myID','lastPostID','userID','pinID')):
-            myID = request.form['myID']
-            userID = request.form['userID'] #0=all friends, anything else for that ID (must be a friend or yourself)
+            myID = int(request.form['myID'])
+            userID = int(request.form['userID']) #0=all friends, anything else for that ID (must be a friend or yourself)
             lastPostID = int(request.form['lastPostID'])
-            pinID = request.form['pinID'] #0 for all, some num for specific post and replies
+            pinID = int(request.form['pinID']) #0 for all, some num for specific post and replies
         else:
             return json.dumps(result)
     else:
         return json.dumps(result)
     try:
         check = True
-        scrap_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.u_id, users.u_name, users.u_handle, users.u_key, users.firebase_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.date_time, pinnedPosts.reply_count, pinnedPosts.image_key, pinnedPosts.points_count, pinnedPostUpvoted.points).filter(pinnedPosts.deleted == False).filter(pinnedPosts.is_pinned == True)
-        if pinID !=0: # userID = 0
-            scrap__check = scrap_check.filter(pinnedPosts.pin_id == pinID)
+        scrap_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.u_id, users.u_name, users.u_handle, users.u_key, users.firebase_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.date_time, pinnedPosts.reply_count, pinnedPosts.image_key, pinnedPosts.points_count, pinnedPostUpvoted.points).filter(pinnedPosts.deleted == False).filter(pinnedPosts.is_pinned == True).filter(pinnedPosts.u_id==users.u_id)
+        if pinID !=0: # userID = 0 specific pinned post and its replies
             scrap_reply = scrap_check.filter(pinnedPosts.original_post_id == pinID)
+            scrap_check = scrap_check.filter(pinnedPosts.pin_id == pinID)
         elif userID != 0: #pinID=0, my own or friends
             if userID != myID:
                 friend_check = db.session.query(friends.friend_status).filter(or_(and_(friends.friend_a==myID, friends.friend_b==userID), and_(friends.friend_b==myID,friends.friend_a==userID))).distinct().first()
-                if friend_check.friend_status is None or friend_check.friend_status != 'F':
-                    result['status'] = 'error'
+                if friend_check is None or friend_check.friend_status != 'F':
+                    result['status'] = 'success'
                     result['message'] = 'Invalid ID'
                     check = False
                 ownScrap=False
             else:
                 ownScrap=True
             if check:
-                scrap_check = scrap_check.filter(pinnedPosts.u_id == userID).filter(pinnedPosts.pin_type != 'R')
+                scrap_check = scrap_check.filter(pinnedPosts.u_id == userID)
                 if ownScrap:
                     scrap_check = scrap_check.filter(pinnedPosts.pin_type != 'A')
-        else: #pinID==0 and userID == 0
-            result['status'] = 'error'
-            result['message'] = 'Invalid Request'
-            check = False
+        else: #pinID==0 and userID == 0 - collection of my and my friends
+            #result['status'] = 'error'
+            #result['message'] = 'Invalid Request'
+            friend_subq = db.session.query(users.u_id).filter(friends.friend_status=='F').filter(or_(and_(friends.friend_a==myID,friends.friend_b==users.u_id),and_(friends.friend_b==myID,friends.friend_a==users.u_id))).filter(users.u_id!=myID).distinct().subquery()
+            scrap_check = scrap_check.filter(or_(pinnedPosts.u_id.in_(friend_subq),pinnedPosts.u_id==myID))
+            check = True
         if lastPostID != 0:
             scrap_check = scrap_check.filter(pinned_posts.pin_id < lastPostID)
             if pinID != 0:
                 scrap_reply = scrap_reply.filter(pinned_posts.pin_id < lastPostID)
-        scrap_check = scrap_check.outerjoin(pinnedPostUpvoted, and_(pinnedPostUpvoted.post_id == pinnedPosts.pin_id, pinnedPostUpvoted.voter_id==myID)).order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)
+        scrap_check = scrap_check.filter(pinnedPosts.pin_type != 'R').outerjoin(pinnedPostUpvoted, and_(pinnedPostUpvoted.post_id == pinnedPosts.pin_id, pinnedPostUpvoted.voter_id==myID)).order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)
         if pinID != 0:
             scrap_reply = scrap_reply.outerjoin(pinnedPostUpvoted, and_(pinnedPostUpvoted.post_id == pinnedPosts.pin_id, pinnedPostUpvoted.voter_id==myID)).order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)
         if check:
             label = ['pinID','userID','userName','userHandle','key','firebaseID','postType','postContent','timestamp','replyCount','imageKey','points','didIVote']
-            scr = add_labels(label, scrap_check, 'imageBucket', EVENT_BUCKET)
+            scr = add_labels(label, scrap_check, 'imageBucket', EVENT_BUCKET, add_all_label_2='bucket', add_all_2=PROF_BUCKET, keySize='small')
             if scr is not None and scr != []:
                 for s in scr:
+                    #s['key']=s['key']+'_small'
                     if s['postType']=='anon':
                         s['userName']='Default'
                         s['userHandle']='Default'
-                if pinID != 0 and scrRep is not None and scrRep != []:
-                    scrRep = add_labels(label, scrap_reply, 'bucket', EVENT_BUCKET)
+                if pinID != 0 and scrap_reply is not None and scrap_reply != []:
+                    scrRep = add_labels(label, scrap_reply, 'imageBucket', EVENT_BUCKET, add_all_label_2='bucket', add_all_2=PROF_BUCKET, keySize='small')   
                     result['scrapBook'] = scr+scrRep
                 else:
                     result['scrapBook'] = scr
                 
                 result['status'] = 'success'
-                result['message'] = 'ScrapBook posts found'
+                result['message'] = 'Scrapbook entries found'
             else:
                 result['status']='success'
-                result['message'] = 'No ScrapBook posts found'
+                result['message'] = 'No scrapbook entries found'
     except Exception, e:
         db.session.rollback()
-        result = {'status':'error', 'message':str(e)}
+        #result = {'status':'error', 'message':str(e)}
+        result['status']='error'
+        result['message']=str(e)
         #result = {'status':'error', 'message':'Scrapbook not retrieved'}        
         pass
     finally:
         db.session.close()
     return json.dumps(result)
 
-
-'''
-@application.route('/getScrapBook', methods=['POST'])
-def getScrapBook():
+@application.route('/chapterProfile', methods=['POST'])
+def chapterProfile():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
-        if all (k in request.form for k in ('myID','lastPostID','userID')):
-            myID = request.form['myID']
-            userID = request.form['userID'] #0=all friends, anything else for that ID (must be a friend or yourself)
-            lastPostID = int(request.form['lastPostID'])
-        else:
-            return json.dumps(result)
-    else:
-        return json.dumps(result)
-    try:
-        check = True
-        forum_check = db.session.query(forumPosts.post_id.label("post_id"), forumPosts.post_cont.label("post_cont"), literal_column("'forum'").label("post_type"), forumPosts.date_time.label("date_time")).filter(forumPosts.is_pinned == True)
-        anon_check = db.session.query(anonForumPosts.a_post_id.label("post_id"), anonForumPosts.a_post_cont.label("post_cont"), literal_column("'anon'").label("post_type"), anonForumPosts.a_date_time.label("date_time")).filter(anonForumPosts.is_pinned == True)
-        group_check = db.session.query(groupPosts.group_post_id.label("post_id"), groupPosts.group_post_cont.label("post_cont"), literal_column("'group'").label("post_type"), groupPosts.date_time.label("date_time")).filter(groupPosts.is_pinned == True)
-        event_check = db.session.query(groupEventPosts.group_event_post_id.label("post_id"), groupEventPosts.group_event_post_cont.label("post_cont"), literal_column("'event'").label("post_type"), groupPosts.date_time.label("date_time")).filter(groupEventPosts.is_pinned == True)
-        ownScrap=False
-        if userID != 0: # my own or friends
-            if userID != myID:
-                friend_check = db.session.query(friends.friend_status).filter(or_(and_(friends.friend_a==myID, friends.friend_b==userID), and_(friends.friend_b==myID,friends.friend_a==userID))).distinct().first()
-                if friend_check.friend_status is None or friend_check.friend_status != 'F':
-                    result['status'] = 'error'
-                    result['message'] = 'Invalid ID'
-                    check = False
-            else:
-                ownScrap=True
-            if check:
-                forum_check = forum_check.filter(forumPosts.post_u_id == userID)
-                anon_check = anon_check.filter(anonForumPosts.a_post_u_id == userID)
-                group_check = group_check.filter(groupPosts.post_u_id == userID)
-                event_check = event_check.filter(groupEventPosts.group_event_post_u_id == userID)
-        elif userID == 0:   
-            friend_check = db.session.query(users.u_id).filter(or_(friends.friend_a==myID,friends.friend_b==myID)).filter(friends.friend_status=='F').filter(users.u_id!=myID).filter(or_(users.u_id==friends.friend_a,users.u_id==friends.friend_b)).distinct().subquery()
-            forum_check = forum_check.filter(forumPosts.post_u_id.in_(friend_check))
-            anon_check = anon_check.filter(anonForumPosts.a_post_u_id.in_(friend_check))
-            group_check = group_check.filter(groupPosts.post_u_id.in_(friend_check))
-            event_check = event_check.filter(groupEventPosts.group_event_post_u_id.in_(friend_check))
-        else:
-            result['status'] = 'error'
-            result['message'] = 'Invalid Request'
-            check = False
-        if lastPostID != 0:
-            forum_check = forum_check.filter(forumPosts.post_id < lastPostID).order_by(forumPosts.post_id.desc()).limit(DEFAULT_LIMIT)
-            anon_check = anon_check.filter(anonForumPosts.a_post_id < lastPostID).order_by(anonForumPosts.a_post_id.desc()).limit(DEFAULT_LIMIT)
-            group_check = group_check.filter(groupPosts.group_post_id < lastPostID).order_by(groupPosts.group_post_id.desc()).limit(DEFAULT_LIMIT)
-            event_check = event_check.filter(groupEventPosts.group_event_post_id < lastPostID).order_by(groupEventPosts.group_event_post_id.desc()).limit(DEFAULT_LIMIT)
-        else:
-            forum_check = forum_check.order_by(forumPosts.post_id.desc()).limit(DEFAULT_LIMIT)
-            anon_check = anon_check.order_by(anonForumPosts.a_post_id.desc()).limit(DEFAULT_LIMIT)
-            group_check = group_check.order_by(groupPosts.group_post_id.desc()).limit(DEFAULT_LIMIT)
-            event_check = event_check.order_by(groupEventPosts.group_event_post_id.desc()).limit(DEFAULT_LIMIT)
-        if check:
-            if (forum_check is not None and forum_check != []) or (anon_check is not None and anon_check != []) or (group_check is not None and group_check != []) or (event_check is not None and event_check != []):
-                label = ['postID','postContent','postType','timestamp']
-                f = add_labels(label,forum_check)
-                if ownScrap: 
-                    a = add_labels(label,anon_check)
-                g = add_labels(label,group_check)
-                e = add_labels(label,event_check)
-                if ownScrap:
-                    result['scrapBook'] = sorted(f+a+g+e, key=lambda k: k['timestamp'], reverse=True)
-                else:
-                    result['scrapBook'] = sorted(f+g+e, key=lambda k: k['timestamp'], reverse=True)
-                result['status'] = 'success'
-                result['message'] = 'ScrapBook posts found'
-            else:
-                result['status']='success'
-                result['message'] = 'No ScrapBook posts found'
-    except Exception, e:
-        db.session.rollback()
-        result = {'status':'error', 'message':str(e)}
-        #result = {'status':'error', 'message':'Scrapbook not retrieved'}        
-        pass
-    finally:
-        db.session.close()
-    return json.dumps(result)
-@application.route('sendToScrapBook', methods=['POST'])
-def pinToScrapBook():
-    result = {'status':'error','message':'Invalid request'}
-    if request.method == 'POST':
-        if all (k in request.form for k in ('myID','postType','postID','postContent', 'postUserID','newContent')):
-            userID = request.form['myID']
-            postID = int(request.form['postID'])
-            postContent = request.form['postContent']        
-            postUserID = request.form['postUserID']
-            newContent = request.form['newContent']
-            pinID = 0
-            imageKey = 'default'
-            if request.form['postType'] in ('forum','anon','group','eventText', 'eventImage'):
-                postType = request.form['postType']
-                imageKey = 'default'
-                if postType == 'forum':
-                    postType = 'F'
-                elif postType == 'anon':
-                    postType = 'A'
-                elif postType == 'group':
-                    postType = 'G'
-                elif postType == 'eventText':
-                    postType = 'E'
-                elif postType == 'eventImage':
-                    postType = 'I'
-                    if 'imageKey' in request.form:
-                        imageKey=request.form['imageKey']
-                    else:
-                        return json.dumps(result)
-            else:
-                return json.dumps(result)
-        elif all (j in request.form for j in ('myID','pinID','replyContent')):
-            userID = request.form['myID']
-            pinID = request.form['pinID']
-            newContent = request.form['replyContent']
-            postType = 'R'
-            postContent = None
-            postUserID = None
-            postID = None
-            imageKey = 'default'
-        else:
-            return json.dumps(result)
-    else:
-        return json.dumps(result)
-    try:
-        data_entered = pinnedPost(u_id = userID, pin_type = postType, pin_post_orig_cont = postContent, pin_post_u_id=postUserID, pin_post_addit_cont = newContent, pin_post_id = postID, image_key = imageKey)
-        result['status'] = 'success'
-        if postType == 'R':
-            result['message'] = 'Reply sent'
-        else:
-            result['message'] = 'Post Pinned'
-        db.session.add(data_entered)
-        db.session.commit()     
-        result['status'] = 'success'
-        result['message'] = 'Post Pinned'
-    except Exception, e:
-        db.session.rollback()
-        result = {'status':'error', 'message':str(e)}
-        #result = {'status':'error', 'message':'Post not pinned'}        
-        pass    
-    finally:
-        db.session.close()
-    return json.dumps(result)
-
-@application.route('getMyScrapBook', methods=['POST'])
-def getMyScrapBook():
-    result = {'status':'error','message':'Invalid request'}
-    if request.method == 'POST':
-        if all (k in request.form for k in ('myID','lastPostID','isMine')):
-            userID = request.form['myID']
-            lastPostID = int(request.form['lastPostID'])
-            if request.form['isMine'] == 'yes':
-                isMine = True
-                otherID = 0;
-            else:
-                isMine = False
-                if 'otherID' in request.form:
-                    otherID = request.form['otherID']
-                else:
-                    return json.dumps(result)
-        else:
-            return json.dumps(result)
-    else:
-        return json.dumps(result)
-    try:
-        if isMine:
-            if lastPostID == 0:
-                pinned_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.pin_post_addit_cont, pinnedPosts.date_time, pinnedPosts.image_key, pinnedPosts.points_count).filter(pinnedPosts.u_id == userID).filter(pinnedPosts.pin_type != 'R').distinct().order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)
-            else:
-                pinned_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.pin_post_addit_cont, pinnedPosts.date_time, pinnedPosts.image_key, pinnedPosts.points_count).filter(pinnedPosts.u_id == userID).filter(pinnedPosts.pin_type != 'R').filter(pinnedPosts.pin_id < lastPostID).distinct().order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)
-        else: #all of my friends
-            if otherID != 0:
-                if lastPostID == 0:
-                    pinned_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.pin_post_addit_cont, pinnedPosts.date_time, pinnedPosts.image_key,  pinnedPosts.points_count,pinnedPostUpvoted.points).filter(pinnedPosts.u_id == otherID).filter(pinnedPosts.pin_type != 'R').outerjoin(pinnedPostUpvoted, and_(pinnedPostUpvoted.post_id == pinnedPosts.pin_id, pinnedPostUpvoted.voter_id==userID)).distinct().order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)
-                else:
-                    pinned_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.pin_post_addit_cont, pinnedPosts.date_time, pinnedPosts.image_key, pinnedPosts.points_count, pinnedPostUpvoted.points).filter(pinnedPosts.u_id == otherID).filter(pinnedPosts.pin_type != 'R').filter(pinnedPosts.pin_id < lastPostID).outerjoin(pinnedPostUpvoted, and_(pinnedPostUpvoted.post_id == pinnedPosts.pin_id, pinnedPostUpvoted.voter_id==userID)).distinct().order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)
-            else:
-                friend_check = db.session.query(users.u_id).filter(or_(friends.friend_a == userID, friends.friend_b == userID)).filter(or_(users.u_id==friends.friend_a, users.u_id==friends.friend_b)).filter(users.u_id != userID).filter(friends.status == 'F').distinct().subquery()
-                if pastPostID == 0:
-                    pinned_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.pin_post_addit_cont, pinnedPosts.date_time, pinnedPosts.image_key, pinnedPosts.points_count, pinnedPostUpvoted.points).filter(pinnedPosts.u_id.in_(friend_check)).filter(pinnedPosts.pin_type != 'R').outerjoin(pinnedPostUpvoted, and_(pinnedPostUpvoted.post_id == pinnedPosts.pin_id, pinnedPostUpvoted.voter_id==userID)).distinct().order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)
-                else:
-                    pinned_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.pin_post_addit_cont, pinnedPosts.date_time, pinnedPosts.image_key, pinnedPosts.points_count, pinnedPostUpvoted.points).filter(pinnedPosts.u_id.in_(friend_check)).filter(pinnedPosts.pin_type != 'R').outerjoin(pinnedPostUpvoted, and_(pinnedPostUpvoted.post_id == pinnedPosts.pin_id, pinnedPostUpvoted.voter_id==userID)).filter(pinnedPosts.pin_id < lastPostID).distinct().order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)          
-        if pinned_check is not Null and pinned_check != []:
-            labels = ['pinID','pinType','originalContent','additionalContent','timestamp','imageKey','points','didIVote']
-            result['scrapBookPosts'] = add_labels(labels, pinned_check,'bucket',EVENT_BUCKET)
-            result['status'] = 'success'
-            result['message'] = 'Posts found'
-        else:
-            result['status'] = 'success'
-            result['message'] = 'No posts found'
-    except Exception, e:
-        db.session.rollback()
-        result = {'status':'error', 'message':str(e)}
-        #result = {'status':'error', 'message':'Scrapbook not retrieved'}        
-        pass
-    finally:
-        db.session.close()
-    return json.dumps(result)
-
-@application.route('getScrapBookPost', methods=['POST'])
-def getMyScrapBook():
-    result = {'status':'error','message':'Invalid request'}
-    if request.method == 'POST':
-        if all (k in request.form for k in ('myID','lastPostID','pinID')):
-            userID = request.form['myID']
-            lastPostID = int(request.form['lastPostID'])
-        else:
-            return json.dumps(result)
-    else:
-        return json.dumps(result)
-    try:
-        pin_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.pin_post_addit_cont, pinnedPosts.date_time, pinnedPosts.image_key, pinnedPosts.points_count, pinnedPostUpvoted.points).filter(pinnedPosts.pin_id == pinID).filter(pinnedPosts.pin_type != 'R').distinct().outerjoin(pinnedPostUpvoted, and_(pinnedPostUpvoted.post_id == pinnedPosts.pin_id, pinnedPostUpvoted.voter_id==userID)).order_by(pinnedPosts.pin_id.desc()).first()
-        if pin_check is not None and pin_check != []:       
-            if lastPostID == 0:
-                reply_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.pin_post_addit_cont, pinnedPosts.date_time, pinnedPosts.image_key, pinnedPosts.points_count, pinnedPostUpvoted.points).filter(pinnedPosts.original_post_id == pinID).filter(pinnedPosts.pin_type == 'R').outerjoin(pinnedPostUpvoted, and_(pinnedPostUpvoted.post_id == pinnedPosts.pin_id, pinnedPostUpvoted.voter_id==userID)).distinct().order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)
-            else:
-                reply_check = db.session.query(pinnedPosts.pin_id, pinnedPosts.pin_type, pinnedPosts.pin_post_orig_cont, pinnedPosts.pin_post_addit_cont, pinnedPosts.date_time, pinnedPosts.image_key, pinnedPosts.points_count, pinnedPostUpvoted.points).filter(pinnedPosts.original_post_id == pinID).filter(pinnedPosts.pin_type == 'R').outerjoin(pinnedPostUpvoted, and_(pinnedPostUpvoted.post_id == pinnedPosts.pin_id, pinnedPostUpvoted.voter_id==userID)).filter(pinnedPosts.pin_id < lastPostID).distinct().order_by(pinnedPosts.pin_id.desc()).limit(DEFAULT_LIMIT)   
-            pin_label = ['pinID','pinType','originalContent','additionalContent','timestamp','imageKey','points', 'didIVote']
-            pinPost = add_labels(pin_label, pin_check, 'bucket',EVENT_BUCKET)
-            if reply_check is not None and reply_check != []:
-                replyPosts = add_labels(pin_label, reply_check)
-                result['message'] = 'Pinned post found. Replies found'
-            else:
-                replyPosts = []
-                result['message'] = 'Pinned post found. No replies found'
-            result['pinPost'] = pinPost+replyPosts
-            result['status'] = 'success'
-        else:
-            result['status'] = 'error'
-            result['message'] = 'pinned post not found'
-    except Exception, e:
-        db.session.rollback()
-        result = {'status':'error', 'message':str(e)}
-        #result = {'status':'error', 'message':'Pinned post not retrieved'}        
-        pass
-    finally:
-        db.session.close()
-    return json.dumps(result)
-'''
-
-
-@application.route('/momentProfile', methods=['POST'])
-def eventProfile():
-    result = {'status':'error','message':'Invalid request'}
-    if request.method == 'POST':
-        if all (k in request.form for k in ('myID','poolID','momentID','size','lastPostID')):
+        if all (k in request.form for k in ('myID','poolID','chapterID','size','lastPostID')):
             userID = request.form['myID']
             groupID = request.form['poolID']
-            eventID = request.form['momentID']
+            eventID = request.form['chapterID']
             lastPostID = int(request.form['lastPostID'])
             if request.form['size'] in ('small','medium','large'):
                 size = request.form['size']
@@ -2332,7 +2303,7 @@ def eventProfile():
         user_check = db.session.query(groupMembers.member_role, groupDetails.group_num_members).filter(groupMembers.group_id == groupID).filter(groupMembers.member_id == userID).filter(groupDetails.group_id==groupMembers.group_id).first()
         if user_check != [] and user_check.member_role in ('M','H','O'): 
             result['membersCount']=user_check.group_num_members
-            attendee_update = db.session.query(groupEventDetails.attending_count).filter(groupEventDetails.event_id==eventID).first()
+            attendee_update = db.session.query(groupEventDetails.attending_count).filter(groupEventDetails.event_id==eventID).filter(groupEventDetails.deleted == False).first()
             attendees_check = db.session.query(groupEventUsers.attendee_id).filter(groupEventUsers.event_role.in_(['M','O'])).filter(groupEventUsers.event_id==eventID).count()
             if attendee_update is not None:
                 if attendees_check is None:
@@ -2340,25 +2311,25 @@ def eventProfile():
                 else:
                     update_num=attendees_check
                 if attendee_update.attending_count != attendees_check:
-                    db.session.query(groupEventDetails.attending_count).filter(groupEventDetails.event_id==eventID).update({'attending_count':update_num})
-            event_search = db.session.query(groupEventDetails.event_name, groupEventDetails.event_description, groupEventDetails.event_start, groupEventDetails.event_end, groupEventDetails.attending_count, groupEventDetails.event_post_count, groupEventUsers.event_role).filter(groupEventDetails.event_id==eventID).outerjoin(groupEventUsers).first()
+                    db.session.query(groupEventDetails.attending_count).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_id==eventID).update({'attending_count':update_num})
+            event_search = db.session.query(groupEventDetails.event_name, groupEventDetails.event_description, groupEventDetails.event_start, groupEventDetails.event_end, groupEventDetails.attending_count, groupEventDetails.event_post_count, groupEventUsers.event_role).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_id==eventID).outerjoin(groupEventUsers).first()
             result['status']='success'
             if event_search != []:
-                label = ['momentName','momentDescription','timestampMomentStart','timestampMomentEnd','attendingCount','momentPostCount','amIAttending'] 
-                result['momentInfo']=add_labels(label, event_search)
+                label = ['chapterName','chapterDescription','timestampChapterStart','timestampChapterEnd','attendingCount','chapterPostCount','amIAttending'] 
+                result['chapterInfo']=add_labels(label, event_search)
                 if lastPostID == 0:
                     event_post_search = db.session.query(groupEventPosts.group_event_post_id, groupEventPosts.cell_type, groupEventPosts.image_key, groupEventPosts.group_event_post_cont, groupEventPosts.date_time, groupEventPosts.date_time_edited, users.u_id, users.u_key, users.u_name, users.u_handle, users.firebase_id, groupMembers.member_role, groupEventPosts.points_count, eventPostUpvoted.points, groupEventPosts.is_pinned).filter(groupEventPosts.deleted==False).filter(groupEventPosts.group_event_post_u_id == users.u_id).filter(groupEventPosts.event_id==eventID).filter(groupEventPosts.group_id == groupMembers.group_id).filter(groupMembers.member_id == users.u_id).filter(groupEventPosts.group_event_post_u_id==users.u_id).outerjoin(eventPostUpvoted, and_(eventPostUpvoted.post_id==groupEventPosts.group_event_post_id, eventPostUpvoted.voter_id==userID)).distinct().order_by(groupEventPosts.group_event_post_id.desc()).limit(DEFAULT_LIMIT)   
                 else:
                     event_post_search = db.session.query(groupEventPosts.group_event_post_id, groupEventPosts.cell_type, groupEventPosts.image_key, groupEventPosts.group_event_post_cont, groupEventPosts.date_time, groupEventPosts.date_time_edited, users.u_id, users.u_key, users.u_name, users.u_handle, users.firebase_id, groupMembers.member_role, groupEventPosts.points_count, eventPostUpvoted.points, groupEventPosts.is_pinned).filter(groupEventPosts.deleted==False).filter(groupEventPosts.group_event_post_id < lastPostID).filter(groupEventPosts.group_event_post_u_id == users.u_id).filter(groupEventPosts.event_id==eventID).filter(groupEventPosts.group_id == groupMembers.group_id).filter(groupMembers.member_id == users.u_id).filter(groupEventPosts.group_event_post_u_id==users.u_id).outerjoin(eventPostUpvoted, and_(eventPostUpvoted.post_id==groupEventPosts.group_event_post_id, eventPostUpvoted.voter_id==userID)).distinct().order_by(groupEventPosts.group_event_post_id.desc()).limit(DEFAULT_LIMIT)
                 if event_post_search != []:
-                    eventLabel = ['postID', 'momentCellType', 'imageKey', 'postContent', 'timestamp', 'timestampEdited', 'userID', 'key', 'userName', 'userHandle', 'firebaseID', 'memberRole', 'pointsCount', 'didIVote','isPinned']
-                    result['momentPosts'] = add_labels(eventLabel, event_post_search, 'bucket', PROF_BUCKET, None, 'imageBucket', EVENT_BUCKET, keySize=size) 
-                    result['message'] = 'Moment found. Moment posts found'
+                    eventLabel = ['postID', 'chapterCellType', 'imageKey', 'postContent', 'timestamp', 'timestampEdited', 'userID', 'key', 'userName', 'userHandle', 'firebaseID', 'memberRole', 'pointsCount', 'didIVote','isPinned']
+                    result['chapterPosts'] = add_labels(eventLabel, event_post_search, 'bucket', PROF_BUCKET, None, 'imageBucket', EVENT_BUCKET, keySize=size) 
+                    result['message'] = 'Chapter found. Chapter posts found'
                 else:
-                    result['message'] = 'Moment found. Moment posts not found'
-                    result['momentPosts'] = []
+                    result['message'] = 'Chapter found. Chapter posts not found'
+                    result['chapterPosts'] = []
             else:
-                result['message'] = 'Moment Not Found.'
+                result['message'] = 'Chapter Not Found.'
         else:
             result['message'] = 'Unauthorized'
             result['status'] = 'success'
@@ -2366,20 +2337,20 @@ def eventProfile():
     except Exception, e:
         db.session.rollback()
         #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'Moment not found'}        
+        result = {'status':'error', 'message':'Chapter not found'}        
         pass
     finally:
         db.session.close()
     return json.dumps(result)
 
-@application.route('/getMomentList', methods=['POST']) #if group is readable, events show up even to non-members bad Idea?
-def getMomentList():
+@application.route('/getChapterList', methods=['POST']) #if group is readable, events show up even to non-members bad Idea?
+def getChapterList():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
-        if all (k in request.form for k in ('myID','poolID','lastMomentID')):
+        if all (k in request.form for k in ('myID','poolID','lastChapterID')):
             userID = request.form['myID']
             groupID = request.form['poolID']
-            lastEventID = request.form['lastMomentID']
+            lastEventID = request.form['lastChapterID']
         else:
             return json.dumps(result)
     else:
@@ -2389,7 +2360,7 @@ def getMomentList():
         publ = db.session.query(groupDetails.group_readable).filter(groupDetails.group_id==groupID).one()
         if (member_check is not None and member_check != []) or publ==True:
             result['myMemberRole']=member_check.member_role        
-            event_check = db.session.query(groupEventDetails.event_id, groupEventDetails.event_name, groupEventDetails.event_description, groupEventDetails.event_start, groupEventDetails.event_end, groupEventUsers.event_role, groupEventDetails.attending_count, groupEventDetails.event_post_count).filter(groupEventDetails.group_id==groupID).outerjoin(groupEventUsers, and_(groupEventDetails.event_id == groupEventUsers.event_id, groupEventUsers.attendee_id==userID)).filter(groupEventDetails.event_id > lastEventID).order_by(groupEventDetails.event_id.desc()).distinct().limit(DEFAULT_LIMIT)
+            event_check = db.session.query(groupEventDetails.event_id, groupEventDetails.event_name, groupEventDetails.event_description, groupEventDetails.event_start, groupEventDetails.event_end, groupEventDetails.event_post_count).filter(groupEventDetails.group_id==groupID).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_id > lastEventID).order_by(groupEventDetails.event_start.desc()).distinct().limit(DEFAULT_LIMIT)
             #or_(groupEventUsers.attendee_id==groupMembers.member_id,
             if event_check is not None and event_check.count() !=0: 
                 last_event=0
@@ -2401,14 +2372,14 @@ def getMomentList():
                         break
                 if last_event != 0:    
                     db.session.query(groupMembers.last_event_seen).filter(groupMembers.member_id==userID).filter(groupMembers.group_id==groupID).filter(groupMembers.member_role.in_(('M','H','O'))).update({'last_event_seen':last_event}, synchronize_session='fetch')
-                    label = ['momentID','momentName','momentDescription','timestampMomentStart','timestampMomentEnd','amIAttending','attendingCount','momentPostCount']    
-                    result['events']= add_labels(label, event_check)
+                    label = ['chapterID','chapterName','chapterDescription','timestampChapterStart','timestampChapterEnd','chapterPostCount']    
+                    result['chapters']= add_labels(label, event_check)
                     result['status'] = 'success'
-                    result['message'] = 'Moments Found'
+                    result['message'] = 'Chapters Found'
                     db.session.commit()
                 else:
                     result['status'] = 'error'
-                    result['message'] = 'Error retrieving moment'
+                    result['message'] = 'Error retrieving chapter'
             else:
                 result['status'] = 'success'
                 result['message'] = 'No events Found' 
@@ -2417,22 +2388,22 @@ def getMomentList():
     except Exception, e:
         db.session.rollback()
         #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'Moments not found'}        
+        result = {'status':'error', 'message':'Chapters not found'}        
         pass
     finally:
         db.session.close()
     data = json.dumps(result)
     return data
 
-@application.route('/sendMomentPost', methods=['POST'])
-def sendMomentPost():
+@application.route('/sendChapterPost', methods=['POST'])
+def sendChapterPost():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
-        if all (k in request.form for k in ('myID','poolID', 'postContent', 'momentCellType','momentID')):
+        if all (k in request.form for k in ('myID','poolID', 'postContent', 'chapterCellType','chapterID')):
             userID = request.form['myID']
             groupID = request.form['poolID']
-            eventID = request.form['momentID']
-            tempCellType = request.form['momentCellType']
+            eventID = request.form['chapterID']
+            tempCellType = request.form['chapterCellType']
             if tempCellType == 'image':
                 cellType = 'I'
             elif tempCellType == 'text':
@@ -2447,11 +2418,13 @@ def sendMomentPost():
     data_entered = groupEventPosts(event_id=eventID, group_id=groupID, group_event_post_u_id=userID, group_event_post_cont=messgCont, cell_type=cellType)
     try:
         member_check = db.session.query(groupMembers.member_role).filter(groupMembers.member_id==userID).filter(groupMembers.group_id==groupID).filter(groupMembers.member_role.in_(('M','H','O'))).first()
+        chapter_check = db.session.query(groupEventDetails.event_name).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_id==eventID).first()
         if member_check is not None and member_check != []:
             db.session.add(data_entered)
             db.session.flush()
+            result['chapterName']=chapter_check.event_name
             result['postID']=data_entered.group_event_post_id
-            db.session.query(groupEventDetails).filter(groupEventDetails.event_id==eventID).update({'event_post_count':groupEventDetails.event_post_count + 1})
+            db.session.query(groupEventDetails).filter(groupEventDetails.deleted == False).filter(groupEventDetails.event_id==eventID).update({'event_post_count':groupEventDetails.event_post_count + 1})
             db.session.commit()
             result['status'] = 'success'
             result['message'] = 'Posted'
@@ -2472,8 +2445,8 @@ def sendMomentPost():
                     pass    
     except Exception, err:
         #result['status'] = 'Error'
-        #result['message'] = 'Not Posted ' + str(err)
-        result = {'status':'error', 'message':'Post not sent'}        
+        result['message'] = 'Not Posted ' + str(err)
+        #result = {'status':'error', 'message':'Post not sent'}        
         db.session.rollback()
         pass    
     finally:
@@ -2481,8 +2454,8 @@ def sendMomentPost():
     data = json.dumps(result)
     return data
 
-@application.route('/groupMemberSearch', methods=['POST'])
-def groupMemberSearch():
+@application.route('/poolMemberSearch', methods=['POST'])
+def poolMemberSearch():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
         if all (k in request.form for k in ('myID','poolID','size','lastUserName','criteria')):
@@ -2506,13 +2479,13 @@ def groupMemberSearch():
             labels = ['userID','userName','userHandle','firebaseID','key','memberRole']
             result['members'] = add_labels(labels, member_search, 'bucket', PROF_BUCKET, keySize=size)
             result['status'] = 'success'
-            result['message'] = 'Group members found'
+            result['message'] = 'Pool members found'
         else:
             result['status'] = 'success'
-            result['message'] = 'No group members found'
+            result['message'] = 'No pool members found'
         db.session.close()        
     except Exception, e:
-        result = {'status':'error', 'message':'Memberss not found'}
+        result = {'status':'error', 'message':'Members not found'}
         #result = {'status':'error', 'message':str(e)}
         pass
     data = json.dumps(result)
@@ -2564,13 +2537,13 @@ def getPoolMemberList():
                 #result['hosts'] = {key:members[key] for i, key in members.iteritems() if members[key]['memberRole']=='H'}
                 #result['members']= {key:members[key] for i, key in members.iteritems() if members[key]['memberRole']=='M'}                
             result['status'] = 'success'
-            result['message'] = 'Group members found'
+            result['message'] = 'Pool members found'
             members_count = db.session.query(groupMembers.member_role).filter(groupMembers.group_id==groupID, groupMembers.member_role.in_(('M','H','O'))).count()
             db.session.query(groupDetails.group_num_members).filter(groupDetails.group_id == groupID).update({'group_num_members':members_count})
             db.session.commit()
         else:
             result['status'] = 'success'
-            result['message'] = 'No group members found'
+            result['message'] = 'No pool members found'
         db.session.close()        
     except Exception, e:
         #result = {'status':'error', 'message':str(e)}
@@ -2579,7 +2552,7 @@ def getPoolMemberList():
     data = json.dumps(result)
     return data
 
-@application.route('/editPoo,MemberList', methods=['POST']) 
+@application.route('/editPoolMemberList', methods=['POST']) 
 def editPoolMemberList(): #must be member from member perspective
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
@@ -2594,7 +2567,7 @@ def editPoolMemberList(): #must be member from member perspective
         return json.dumps(result)    
     try:
         member_admin_check = db.session.query(groupDetails.group_invite_only, groupMembers.member_role).filter(groupMembers.member_id==myID).filter(groupMembers.group_id==groupID).filter(groupMembers.member_role.in_(('M','H','O'))).filter(groupDetails.group_id == groupID).first()
-        if member_admin_check.member_role in('M','H') and action == 'leaveGroup' and userID==myID:
+        if member_admin_check.member_role in('M','H') and action == 'leavePool' and userID==myID:
             result['status'] = 'success'
             result['message'] = 'Action complete' 
             db.session.query(groupMembers.member_role).filter(groupMembers.member_id==userID).filter(groupMembers.group_id==groupID).filter(groupMembers.member_role.in_(('M','H'))).update({'member_role':'N'}, synchronize_session='fetch')
@@ -2606,6 +2579,7 @@ def editPoolMemberList(): #must be member from member perspective
                 myNewRole = None
                 newMemberRole = None  
                 memberChange = 0
+                sendNotice = False
                 if other_group_check.member_role in ('S','I'):
                     result['status'] = 'success'
                     result['message'] = 'Action complete' 
@@ -2621,9 +2595,10 @@ def editPoolMemberList(): #must be member from member perspective
                             newMemberRole = 'M'
                             approver = myID
                             memberChange = 1
+                            sendNotice = True
                         else:
                             result['message'] = 'Invalid action'
-                elif other_group_check.member_role in ('M','H','O','N'): 
+                elif other_group_check.member_role in ('M','H','O','N','B'): 
                     result['status'] = 'success'
                     result['message'] = 'Action complete'         
                     approver = None
@@ -2643,9 +2618,10 @@ def editPoolMemberList(): #must be member from member perspective
                         myNewRole = 'H'
                         newMemberRole = 'O'
                         approver = myID
-                    elif action == 'invite' and other_group_check.member_role == 'N':
+                    elif action == 'invite' and other_group_check.member_role in ('N','B'):
                         newMemberRole = 'I'
                         approver = myID
+                        sendNotice = True
                     elif action == 'blockUser':
                         newMemberRole = 'B'
                         approver = myID
@@ -2676,25 +2652,31 @@ def editPoolMemberList(): #must be member from member perspective
                 result['message'] = 'Action complete' 
                 member_data = groupMembers(groupID, userID, 'I')
                 db.session.add(member_data)
-                user_check = db.session.query(users.device_arn, users.firebase_id).filter(users.u_id==userID).one()
-                group_check = db.session.query(groupDetails.group_handle).filter(groupDetails.group_id==groupID).one()
-                subj = 'getPoolList'
-                cont = '.'+group_check.group_handle + ' has sent you a Pool request.'
-                notificUID=userID
-                notificType='M'
-                result['notificationSent']=logNotification(notificUID, cont, subj, notificType)
-                firebaseNotification(user_check.firebase_id, cont)
-                if user_check is not None and user_check != [] and group_check is not None and group_check != []:
-                    if user_check.device_arn !=0 and not inNotification(user_check.firebase_id):
-                        badge = db.session.query(notific.notific_id).filter(notific.n_u_id==userID).filter(notific.notific_seen==False).count()
-                        push(user_check.device_arn, badge, cont, subj)    
+                sendNotice = True
             elif action == 'leavePool' and member_admin_check.member_role != 'O' and userID==myID:
                 result['status'] = 'success'
                 result['message'] = 'Action complete'
                 db.session.query(groupMembers.member_role).filter(groupMembers.member_id==userID).filter(groupMembers.group_id==groupID).filter(groupMembers.member_role.in_(('M','H'))).update({'member_role':'N'})
             else:
                 result = {'status':'error', 'message':'Invalid request'}
-            db.session.commit()
+            if sendNotice:
+                user_check = db.session.query(users.device_arn, users.firebase_id).filter(users.u_id==userID).one()
+                group_check = db.session.query(groupDetails.group_handle).filter(groupDetails.group_id==groupID).one()
+                subj = 'getPoolList'
+                cont = '.'+group_check.group_handle + ' has sent you a Pool request.'
+                notificUID=userID
+                notificType='M'
+                inNot = inNotification(user_check.firebase_id)
+                if inNot==True:
+                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType)
+                    firebaseNotification(user_check.firebase_id, cont)
+                if user_check is not None and user_check != [] and group_check is not None and group_check != []:
+                    if user_check.device_arn !=0 and inNot==False:
+                        result['notificationSent']=logNotification(notificUID, cont, subj, notificType)
+                        firebaseNotification(user_check.firebase_id, cont)      
+                        db.session.commit()
+                        badge = db.session.query(notific.notific_id).filter(notific.n_u_id==userID).filter(notific.notific_seen==False).count()
+                        push(user_check.device_arn, badge, cont, subj)  
         elif member_admin_check.member_role in ('M','H','O') and action == 'invite' and member_admin_check.group_invite_only == 'N' and userID != myID:
             other_group_check = db.session.query(groupMembers.member_role).filter(groupMembers.member_id==userID, groupMembers.group_id==groupID).first()
             sendNotice = False
@@ -2717,14 +2699,20 @@ def editPoolMemberList(): #must be member from member perspective
                 cont = '.'+group_check.group_handle + ' has sent you a Pool request.'
                 notificUID=userID
                 notificType='M'
-                result['notificationSent']=logNotification(notificUID, cont, subj, notificType)
-                firebaseNotification(user_check.firebase_id, cont)
+                inNot = inNotification(user_check.firebase_id)
+                if inNot == True:
+                    result['notificationSent']=logNotification(notificUID, cont, subj, notificType)
+                    firebaseNotification(user_check.firebase_id, cont)
                 if user_check is not None and user_check != [] and group_check is not None and group_check != []:
-                    if user_check.device_arn !=0 and not inNotification(user_check.firebase_id):
+                    if user_check.device_arn !=0 and inNot == False:
+                        result['notificationSent']=logNotification(notificUID, cont, subj, notificType)
+                        firebaseNotification(user_check.firebase_id, cont)   
+                        db.session.commit()
                         badge = db.session.query(notific.notific_id).filter(notific.n_u_id==userID).filter(notific.notific_seen==False).count()
-                        push(user_check.device_arn, badge, cont, subj)        
+                        push(user_check.device_arn, badge, cont, subj)     
         else:
             result = {'status':'error', 'message':'Unauthorized'}
+        db.session.commit()
     except Exception, e:
         #result['status'] = 'Error'
         #result['message'] = 'Changes not made ' + str(e)
@@ -2753,24 +2741,46 @@ def interactPoolRequest():
     else:
         return json.dumps(result)
     try:
-        group_check=db.session.query(groupDetails.group_invite_only, groupPosts.group_post_id).filter(groupDetails.group_id == groupID).filter(groupDetails.group_id==groupPosts.group_id).order_by(groupPosts.group_post_id.desc()).first()
+        group_check=db.session.query(groupDetails.group_invite_only).filter(groupDetails.group_id == groupID).first()
         if group_check is not None and group_check !=[]: #actions
+            last_post_check = db.session.query(groupPosts.group_post_id).filter(groupPosts.group_id==groupID).order_by(groupPosts.group_post_id.desc()).first()
+            last_event_check = db.session.query(groupEventDetails.event_id).filter(groupEventDetails.group_id==groupID).filter(groupEventDetails.deleted == False).order_by(groupEventDetails.event_id).first()
+            if last_post_check is not None and last_post_check != []:
+                lastPost = last_post_check.group_post_id
+            else:      
+                lastPost = None
+            if last_event_check is not None and last_event_check !=[]:
+                lastEvent = last_event_check.event_id
+            else:       
+                lastEvent = None    
             if action == 'request':
                 member_check = db.session.query(groupMembers.member_role).filter(groupMembers.member_id==requesterID).filter(groupMembers.group_id==groupID).first()
                 if member_check is not None and member_check.member_role != 'B':
                     if group_check.group_invite_only == 'N':
-                        db.session.query(groupMembers.member_role, groupMembers.last_post_seen).filter(groupMembers.member_id==requesterID).filter(groupMembers.group_id==groupID).update({'member_role':'M', 'member_message':userMessage, 'last_post_seen':group_check.group_post_id})
+                        #db.session.query(groupMembers.member_role).filter(groupMembers.member_id==requesterID).filter(groupMembers.group_id==groupID).update({'member_role':'M', 'member_message':userMessage, 'last_post_seen':group_check.group_post_id})
+                        updateData = {'member_role':'M', 'member_message':userMessage}
+                        if lastPost is not None:
+                            updateData.update({'last_post_seen':lastPost,'last_host_post_seen':lastPost})
+                        if lastEvent is not None:
+                            updateData.update({'last_event_seen':lastEvent})
                         result['status']= 'success'
                         result['message'] = 'joined pool'
                     elif member_check.member_role == 'S':
-                        db.session.query(groupMembers.member_role, groupMembers.last_post_seen).filter(groupMembers.member_id==requesterID).filter(groupMembers.group_id==groupID).update({'member_role':'M','member_message':userMessage, 'last_post_seen':group_check.group_post_id})
+                        #db.session.query(groupMembers.member_role, groupMembers.last_post_seen).filter(groupMembers.member_id==requesterID).filter(groupMembers.group_id==groupID).update({'member_role':'M','member_message':userMessage, 'last_post_seen':group_check.group_post_id})
+                        updateData = {'member_role':'M','member_message':userMessage}
+                        if lastPost is not None:
+                            updateData.update({'last_post_seen':lastPost,'last_host_post_seen':lastPost})
+                        if lastEvent is not None:
+                            updateData.update({'last_event_seen':lastEvent})
                         result['status']= 'success'
                         result['message'] = 'joined pool'
                     else:    
-                        db.session.query(groupMembers.member_role).filter(groupMembers.member_id==requesterID).filter(groupMembers.group_id==groupID).update({'member_role':'S','member_message':userMessage})
+                        #db.session.query(groupMembers.member_role).filter(groupMembers.member_id==requesterID).filter(groupMembers.group_id==groupID).update({'member_role':'S','member_message':userMessage})
+                        updateData = {'member_role':'S','member_message':userMessage}
                         result['status']='success'
                         result['message'] = 'request sent' 
                         groupInteractRequestHelper(requesterID, groupID)
+                    db.session.query(groupMembers.member_role).filter(groupMembers.member_id==requesterID).filter(groupMembers.group_id==groupID).update(updateData)
                 elif group_check.group_invite_only == 'N':
                     member_data = groupMembers(group_id=groupID, member_id=requesterID, member_role='M') 
                     db.session.query(groupDetails.group_num_members).filter(groupDetails.group_id == groupID).update({'group_num_members':groupDetails.group_num_members + 1})
@@ -2822,15 +2832,20 @@ def interactPoolRequest():
                     else:
                         return json.dumps(result) 
                 if newRole is not None:
-                    db.session.query(groupMembers.member_role, group_check.group_post_id).filter(groupMembers.member_id==requesterID).filter(groupMembers.group_id==groupID).update({'member_role':newRole, 'last_post_seen':group_check.group_post_id}) 
+                    updateData = {'member_role':newRole}
+                    if lastPost is not None:
+                        updateData.update({'last_post_seen':lastPost,'last_host_post_seen':lastPost})
+                    if lastEvent is not None:
+                        updateData.update({'last_event_seen':lastEvent})
+                    db.session.query(groupMembers.member_role).filter(groupMembers.member_id==requesterID).filter(groupMembers.group_id==groupID).update(updateData) 
             else:
                 return json.dumps(result)
             db.session.commit()
     except Exception, e:
         db.session.rollback()
         #result = {'status':'error', 'message':str(e)}
-        #result['error']=str(e)
-        result = {'status':'error', 'message':'Request not updated'}        
+        result['error']=str(e)
+        #result = {'status':'error', 'message':'Request not updated'}        
         pass
     finally:
         db.session.close()
@@ -2871,15 +2886,15 @@ def myInvitablePoolList():
     data = json.dumps(result)
     return data
 
-@application.route('/interactMoment', methods=['POST'])
-def interactMoment():
+@application.route('/interactChapter', methods=['POST'])
+def interactChapter():
     result = {'status':'error','message':'Invalid request'}
     if request.method == 'POST':
-        if all (k in request.form for k in ('myID','momentID','poolID','action')):
+        if all (k in request.form for k in ('myID','chapterID','poolID','action')):
             userID = request.form['myID']
             groupID = request.form['poolID']
-            eventID = request.form['momentID']
-            action = request.form['action'] #joinEvent, leaveEvent, getUsers
+            eventID = request.form['chapterID']
+            action = request.form['action'] #joinEvent, leaveEvent, getUsers, delete
             if action == 'getUsers':
                 if all (j in request.form for j in ('size','lastUserName')) and request.form['size'] in ('small','medium','large'):
                     lastUserName=request.form['lastUserName']
@@ -2896,7 +2911,7 @@ def interactMoment():
     try:
         member_check = db.session.query(groupMembers.member_role).filter(groupMembers.member_id==userID).filter(groupMembers.group_id==groupID).filter(groupMembers.member_role.in_(('M','H','O'))).first()
         if member_check is not None and member_check != []:
-            if action == 'joinMoment':            
+            if action == 'joinChapter':            
                 event_check = db.session.query(groupEventUsers.attendee_id, groupEventUsers.event_role).filter(groupEventUsers.event_id == eventID).filter(groupEventUsers.attendee_id == userID).first()
                 if event_check is not None and member_check != []:
                     if event_check.event_role=='W':
@@ -2907,19 +2922,19 @@ def interactMoment():
                         newRole=None
                     if newRole is not None:
                         db.session.query(groupEventUsers.event_role).filter(groupEventUsers.event_id==eventID).filter(groupEventUsers.attendee_id==userID).update({'event_role':newRole})
-                        db.session.query(groupEventDetails.attending_count).filter(groupEventDetails.event_id==eventID).update({'attending_count':groupEventDetails.attending_count+1})
-                        result['message']='Joined Moment'
+                        db.session.query(groupEventDetails.attending_count).filter(groupEventDetails.event_id==eventID).filter(groupEventDetails.deleted == False).update({'attending_count':groupEventDetails.attending_count+1})
+                        result['message']='Joined Chapter'
                         result['status']='success'
                     else:
-                        result['message']='Already attending moment!'
+                        result['message']='Already attending chapter!'
                         result['status']='success'
                 else:
                     event_member_data = groupEventUsers(event_id=eventID, attendee_id=userID, event_role='M')
                     db.session.add(event_member_data)
-                    db.session.query(groupEventDetails.attending_count).filter(groupEventDetails.event_id==eventID).update({'attending_count':groupEventDetails.attending_count+1})
-                    result['message']='Joined Moment'
+                    db.session.query(groupEventDetails.attending_count).filter(groupEventDetails.event_id==eventID).filter(groupEventDetails.deleted == False).update({'attending_count':groupEventDetails.attending_count+1})
+                    result['message']='Joined Chapter'
                     result['status']='success'
-            elif action == 'leaveMoment':
+            elif action == 'leaveChapter':
                 event_check = db.session.query(groupEventUsers.attendee_id, groupEventUsers.event_role).filter(groupEventUsers.event_id == eventID).filter(groupEventUsers.attendee_id == userID).first()
                 if event_check is not None and event_check !=[]:
                     if event_check.event_role=='M':
@@ -2930,11 +2945,11 @@ def interactMoment():
                         newRole=None
                     if newRole is not None:
                         db.session.query(groupEventUsers.event_role).filter(groupEventUsers.event_id == eventID).filter(groupEventUsers.attendee_id == userID).update({'event_role':newRole})
-                        db.session.query(groupEventDetails.attending_count).filter(groupEventDetails.event_id==eventID).update({'attending_count':groupEventDetails.attending_count-1})
-                        result['message']='Successfully left moment'
+                        db.session.query(groupEventDetails.attending_count).filter(groupEventDetails.event_id==eventID).filter(groupEventDetails.deleted == False).update({'attending_count':groupEventDetails.attending_count-1})
+                        result['message']='Successfully left chapter'
                         result['status']='success'
                     else:
-                        result['message']='Not attending the moment'
+                        result['message']='Not attending the chapter'
                         result['status']='success'
                 else:
                     result['message']='Not attending the momenbt'
@@ -2945,13 +2960,20 @@ def interactMoment():
                 result['users'] = add_labels(label,event_member_search,'bucket',PROF_BUCKET, keySize=size)
                 result['message']='Users found'
                 result['status']='success'
+            elif action == 'delete' and member_check.member_role in ('O','H'):
+                event_num_check = db.session.query(groupEventUsers.attendee_id).filter(groupEventUsers.event_id==eventID).filter(groupEventUsers.event_role.in_(('M','O'))).count()
+                if event_num_check == 0:
+                    result['status'] = 'error'
+                    result['message'] = 'Users attending Chapter'
+                else:
+                    db.session.query(groupEventDetails.deleted).filter(groupEventDetails.event_id==eventID).filter(groupEventDetails.group_id==groupID).update({'deleted':True})
         else:
             result = {'status':'success', 'message':'Unauthorized'}
         db.session.commit()
     except Exception, e:
         #result['status'] = 'Error'
         #result['message'] = 'Changes not made - ' + str(e)
-        result = {'status':'error', 'message':'Moment not updated'}        
+        result = {'status':'error', 'message':'Chapter not updated'}        
         db.session.rollback()
         pass    
     finally:
@@ -3010,7 +3032,7 @@ def sendPoint():
         pointsChanged = False
         votedAlready = False
         if postType == 'pond':
-            post_check = db.session.query(forumPosts.points_count, users.u_personal_points,users.u_id).filter(forumPosts.post_id == postID).filter(users.u_id==forumPosts.post_u_id).filter(users.u_id != userID).first()
+            post_check = db.session.query(forumPosts.points_count, users.u_personal_points, users.u_id).filter(forumPosts.post_id == postID).filter(users.u_id==forumPosts.post_u_id).filter(users.u_id != userID).first()
             point_check = db.session.query(forumPostUpvoted).filter(forumPostUpvoted.post_id==postID).filter(forumPostUpvoted.voter_id==userID).first()
             if point_check is not None and point_check != []:
                 votedAlready = True
@@ -3056,7 +3078,7 @@ def sendPoint():
                 result['status'] = 'error'
                 result['message'] = 'Points not added'
         elif postType in ('host','pool'):
-            post_check = db.session.query(groupPosts.points_count, users.u_personal_points,groupPosts.group_id).filter(groupPosts.group_post_id == postID).filter(groupPosts.post_u_id==users.u_id).filter(groupMembers.group_id==groupPosts.group_id).filter(groupMembers.member_id==users.u_id).filter(groupMembers.member_role.in_(('M','H','O'))).filter(users.u_id != userID).first()
+            post_check = db.session.query(groupPosts.points_count, users.u_personal_points,groupPosts.group_id, users.u_id).filter(groupPosts.group_post_id == postID).filter(groupPosts.post_u_id==users.u_id).filter(groupMembers.group_id==groupPosts.group_id).filter(groupMembers.member_id==users.u_id).filter(groupMembers.member_role.in_(('M','H','O'))).filter(users.u_id != userID).first()
             point_check = db.session.query(groupPostUpvoted).filter(groupPostUpvoted.post_id==postID).filter(groupPostUpvoted.voter_id==userID).first()
             if point_check is not None and point_check != []:
                 votedAlready = True
@@ -3083,20 +3105,20 @@ def sendPoint():
             else:
                 result['status'] = 'error'
                 result['message'] = 'Points not added'
-        elif postType == 'moment':
-            post_check = db.session.query(groupEventPosts.points_count, users.u_personal_points,groupEventPosts.group_id).filter(groupEventPosts.group_event_post_id == postID).filter(groupEventPosts.group_event_post_u_id==users.u_id).filter(groupMembers.group_id==groupEventPosts.group_id).filter(groupMembers.member_id==users.u_id).filter(groupMembers.member_role.in_(('M','H','O'))).filter(users.u_id != userID).first()
-            point_check = db.session.query(eventPostUpvoted).filter(eventPostUpvoted.post_id==postID).filter(eventPostUpvoted.voter_id==userID).one()
+        elif postType == 'chapter':
+            post_check = db.session.query(groupEventPosts.points_count, users.u_personal_points,groupEventPosts.group_id, users.u_id).filter(groupEventPosts.group_event_post_id == postID).filter(groupEventPosts.group_event_post_u_id==users.u_id).filter(groupMembers.group_id==groupEventPosts.group_id).filter(groupMembers.member_id==users.u_id).filter(groupMembers.member_role.in_(('M','H','O'))).filter(users.u_id != userID).first()
+            point_check = db.session.query(eventPostUpvoted).filter(eventPostUpvoted.post_id==postID).filter(eventPostUpvoted.voter_id==userID).first()
             if point_check is not None and point_check != []:
                 votedAlready = True
             if post_check is not None and post_check !=[]:
                 member_check = db.session.query(groupMembers.member_role).filter(groupMembers.group_id==post_check.group_id).filter(groupMembers.member_id==userID).first()
                 if member_check is not None and member_check.member_role in ('M','H','O'):
-                    if user_check.stipend_points >= numPoints:
+                    if user_check.u_stipend_points >= numPoints:
                         userStipendChange = -numPoints
                         postPointChange = numPoints
                         postUserPersonalChange = numPoints
                         pointsChanged=True 
-                    elif user_check.stipend_points + user_check.u_personal_points >= numPoints:
+                    elif user_check.u_stipend_points + user_check.u_personal_points >= numPoints:
                         userPersonalChange =  -numPoints + user_check.u_stipend_points
                         userStipendChange = -user_check.u_stipend_points
                         postPointChange = numPoints
@@ -3112,7 +3134,7 @@ def sendPoint():
                 result['status'] = 'error'
                 result['message'] = 'Points not added'
         elif postType == 'scrap':
-            post_check = db.session.query(pinnedPosts.count_points, users.u_personal_points,users.u_id).filter(pinnedPosts.pin_id == postID).filter(users.u_id==pinnedPosts.u_id).filter(users.u_id != userID).first()
+            post_check = db.session.query(pinnedPosts.points_count, users.u_personal_points,users.u_id).filter(pinnedPosts.pin_id == postID).filter(users.u_id==pinnedPosts.u_id).filter(users.u_id != userID).first()
             point_check = db.session.query(pinnedPostUpvoted).filter(pinnedPostUpvoted.post_id==postID).filter(pinnedPostUpvoted.voter_id==userID).first()
             if point_check is not None and point_check != []:
                 votedAlready = True
@@ -3149,7 +3171,7 @@ def sendPoint():
                     db.session.query(forumPostUpvoted).filter(forumPostUpvoted.post_id==postID).filter(forumPostUpvoted.voter_id==userID).update({'points':forumPostUpvoted.points + numPoints})
                 else:
                     db.session.add(groupPostUpvoted(voter_id = userID, post_id = postID, points = numPoints))
-            elif postType == 'moment':
+            elif postType == 'chapter':
                 db.session.query(groupEventPosts).filter(groupEventPosts.group_event_post_id==postID).update({'points_count':groupEventPosts.points_count+postPointChange})
                 if votedAlready:
                     db.session.query(forumPostUpvoted).filter(forumPostUpvoted.post_id==postID).filter(forumPostUpvoted.voter_id==userID).update({'points':forumPostUpvoted.points + numPoints})
@@ -3162,7 +3184,7 @@ def sendPoint():
                 else:
                     db.session.add(anonForumPostUpvoted(voter_id = userID, post_id = postID, points = numPoints))
             elif postType == 'scrap':
-                db.session.query(forumPosts).filter(forumPosts.post_id==postID).update({'points_count':forumPosts.points_count+postPointChange})
+                db.session.query(pinnedPosts).filter(pinnedPosts.pin_id==postID).update({'points_count':pinnedPosts.points_count+postPointChange})
                 if votedAlready:
                     db.session.query(pinnedPostUpvoted).filter(pinnedPostUpvoted.post_id==postID).filter(pinnedPostUpvoted.voter_id==userID).update({'points':pinnedPostUpvoted.points + numPoints})
                 else:
@@ -3175,8 +3197,8 @@ def sendPoint():
             result['message'] = 'No Points Added'
     except Exception, e:
         db.session.rollback()
-        #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'Points not sent'}        
+        result = {'status':'error', 'message':str(e)}
+        #result = {'status':'error', 'message':'Points not sent'}        
         pass
     finally:
         db.session.close()
@@ -3189,7 +3211,7 @@ def editPost():
         if all (k in request.form for k in ('myID', 'postType', 'postID','action')):
             userID = int(request.form['myID'])
             postID = request.form['postID']
-            postType = request.form['postType'] #forum, group, event, scrap
+            postType = request.form['postType'] #forum, anon, group, event, scrap
             action = request.form['action']
             if action == 'edit' and 'newContent' in request.form:
                 newContents = request.form['newContent']
@@ -3250,14 +3272,15 @@ def editPost():
             else:
                 result['status'] = 'error'
                 result['message'] = 'Post not modified'
-        elif postType == 'moment':
-            member_check = db.session.query(groupMembers.member_role).filter(groupEventPosts.group_event_post_id==postID).filter(groupEventPosts.group_id==groupMembers.group_id).filter(groupMembers.member_id==userID).filter(groupMembers.member_role in ('M','H','O')).first()
+        elif postType == 'chapter':
+            member_check = db.session.query(groupMembers.member_role).filter(groupEventPosts.group_event_post_id==postID).filter(groupEventPosts.group_id==groupMembers.group_id).filter(groupMembers.member_id==userID).filter(groupMembers.member_role.in_(('M','H','O'))).first()
             if member_check is not None and member_check != []:
                 post_check = db.session.query(groupEventPosts).filter(groupEventPosts.group_event_post_id == postID)
                 if post_check.first():
                     if post_check.one().group_event_post_u_id == userID or (action == 'delete' and member_check.member_role in ('H','O')):
                         if action == 'delete':
                             post_check.update({'deleted':True,'group_event_post_cont':newContents,'date_time_edited':datetime.now()})                        
+                            db.session.query(groupEventDetails.event_post_count).filter(groupEventDetails.group_id == groupEventPosts.group_id).filter(groupEventDetails.event_id==groupEventPosts.event_id).filter(groupEventPosts.group_event_post_id==postID).update({'event_post_count':groupEventDetails.event_post_count-1})
                         else:
                             post_check.update({'group_event_post_cont':newContents,'date_time_edited':datetime.now()})
                         result['status'] = 'success'
@@ -3276,7 +3299,7 @@ def editPost():
             if post_check.first() is not None:
                 if action == 'delete':
                     post_check.update({'deleted':True,'a_post_cont':newContents,'a_date_time_edited':datetime.now()})                        
-                    if post_check.one().original_post_id != 0:
+                    if post_check.one().a_original_post_id != 0:
                         db.session.query(anonForumPosts).filter(anonForumPosts.a_post_id == post_check.one().a_original_post_id).update({'a_reply_count':anonForumPosts.a_reply_count - 1})
                 else:
                     post_check.update({'a_post_cont':newContents,'a_date_time_edited':datetime.now()})               
@@ -3288,8 +3311,8 @@ def editPost():
         db.session.commit()
     except Exception, e:
         db.session.rollback()
-        #result = {'status':'error', 'message':str(e)}
-        result = {'status':'error', 'message':'Post not updated'}        
+        result = {'status':'error', 'message':str(e)}
+        #result = {'status':'error', 'message':'Post not updated'}        
         pass
     finally:
         db.session.close()
@@ -3375,14 +3398,14 @@ def handleCheck():
     if request.method == 'POST':
         if all (k in request.form for k in ('handle','handleType')):
             handle = request.form['handle']
-            handleType = request.form['handleType'] #group, user
+            handleType = request.form['handleType'] #pool, user
         else:
             return json.dumps(result)
     else:
         return json.dumps(result)
     try:
         handle_check = None
-        if handleType == 'group':
+        if handleType == 'pool':
             handle_check = db.session.query(groupDetails.group_handle).filter(groupDetails.group_handle == handle).first()
         elif handleType == 'user':
             handle_check = db.session.query(users.u_handle).filter(users.u_handle==handle).first()
@@ -3539,10 +3562,10 @@ def test():
         messageJSON = json.dumps(message,ensure_ascii=False)
         sns.publish(Message=messageJSON, TargetArn=device_arn)#,message_structure='json')
         '''
-        innerMessage = str(datetime.now()) #request.form['message']
+        innerMessage = str(datetime.now()) + 'test push' #request.form['message']
         badge = 1 #request.form['badge']
         category = 'testcategory' #request.form['category']
-        device_arn = 'arn:aws:sns:us-west-1:554061732115:endpoint/APNS_SANDBOX/hostPostDev/a2a4724f-900f-3e84-8c85-405fb6de0b4e' 
+        device_arn = 'arn:aws:sns:us-west-1:554061732115:endpoint/APNS/.native/d16c21b4-e198-3411-93fb-3c03436044b1' 
         result = push(device_arn, badge, innerMessage, category)
         resetStipendPoints()
     except Exception, e:
@@ -3619,6 +3642,24 @@ def test5():
     res = inNotification(recipFBID)
     return str(res) + '\n'
 
+
+@application.route('/test6', methods=['GET','POST'])
+def test6():
+    result = {'status':'error','message':'Invalid request'}
+    if request.method == 'POST':
+        if 'reg' in request.form:
+            reg = request.form['reg']
+        else:
+            return json.dumps(result)
+    else:
+        return json.dumps(result)
+    try:
+        result['res']=re.match(r"_small$|_medium$|_large$", reg)
+    except Exception, e:
+        result = {'error':str(e)}
+    return json.dumps(result)
+
+                
 
 #iv=wExMGMCtvrhXqil5&token=[65, 171, 188, 48, 15, 101, 147, 222, 124, 211, 110, 108, 55, 183, 223, 21, 135, 44, 184, 48, 103, 121, 81, 132, 20, 33, 160, 246, 197, 157, 32, 126]
 @application.route('/testEncrypt', methods=['GET','POST'])
@@ -3742,6 +3783,44 @@ def order_group_dist(group_list, long, lat):
         dist = sqrt((g.group_long-long)-(g.group_lat-lat))
 '''
 
+#user_check = db.session.query(users.u_id, users.u_handle, users.device_arn, users.firebase_id, groupDetails.group_handle).filter(groupDetails.group_id==groupMembers.group_id).filter(users.u_id == groupMembers.member_id).filter(groupMembers.group_id==groupID).filter(groupMembers.member_role.in_(('M','H','O'))).all()
+def notifyPool(user_check, myHandle, messgCont, originalPostID, groupID, myID):
+    try:
+        for u in user_check:
+            subj = 'getPoolPost'
+            cont = '.' + u.group_handle + ', @' + myHandle +': ' + messgCont
+            notificType = 'G'
+            notificUID = u.u_id
+            #result['notificationSent' + str(u.u_id)]=
+            logNotification(notificUID, cont, subj, notificType, notificPostID=originalPostID, notificGroupID=groupID)
+            firebaseNotification(u.firebase_id, cont)
+            if u is not None and u != [] and u.u_id != myID:
+                if u.device_arn != 0 and not inNotification(u.firebase_id) and not (inPool(u.firebase_id)==groupID) and inPool(u.firebase_id)>=0:
+                    badge = db.session.query(notific.notific_id).filter(notific.n_u_id==u.u_id).filter(notific.notific_seen==False).count()
+                    push(u.device_arn, badge, cont, subj)
+    except Exception, e:
+        #print str(e)
+        pass
+    finally:
+        db.session.close()
+
+def notifyChat(recip_dev_arn, sendID, recipID, recip_fb_id, subj, cont, notificType, notificUID):
+    try:    
+        if recip_dev_arn != 0:
+            if not checkInChat(sendID, recipID, recip_fb_id): #checkInChat -> true if in chat, false if not. 
+                logNotification(notificUID, cont, subj, notificType, notificOtherID=sendID)
+                firebaseNotification(recip_fb_id, cont) 
+                if not inNotification(recip_fb_id):
+                    badge = db.session.query(notific.notific_id).filter(notific.n_u_id==recipID).filter(notific.notific_seen==False).count()
+                    push(recip_dev_arn, badge, cont, subj)
+    except Exception, e:
+        #print '\n\nasdf\n'
+        #print str(e)
+        pass
+    finally:
+        db.session.close()
+                
+
 def merge_notifications(notifics, globalNotifics):
     temp = notifics + globalNotifics
     res = sorted(temp, key=lambda noti: noti['timestamp'], reverse=True)
@@ -3764,12 +3843,12 @@ def filter_groups(group_list, new_host_posts=None, new_posts=None, new_events=No
                 sentRequests.append([g.group_id, g.group_name, g.group_key, g.group_handle])
             elif g.member_role == 'I':
                 receivedInvites.append([g.group_id, g.group_name, g.group_key,g.group_handle])
-        label = ['groupID','groupName','groupKey','groupHandle','memberRole']
+        label = ['poolID','poolName','poolKey','poolHandle','memberRole']
         if new_events is not None:
-            current_label =  ['groupID','groupName','groupKey','groupHandle','memberRole','newHostPostsCount','newPostsCount','newEventsCount']
+            current_label =  ['poolID','poolName','poolKey','poolHandle','memberRole','newHostPostsCount','newPostsCount','newChaptersCount']
         else:
             current_label = label
-        add_all = 'groupBucket'
+        add_all = 'poolBucket'
         labelCurrentGroups = add_labels(current_label, currentGroups, add_all, GROUP_BUCKET, keySize=keySize)
         labelSentRequests = add_labels(label, sentRequests, add_all, GROUP_BUCKET, keySize=keySize)      
         labelReceivedInvites = add_labels(label, receivedInvites, add_all, GROUP_BUCKET, keySize=keySize)
@@ -3783,11 +3862,11 @@ def filter_friends(friend_list, kSize):
     currentFriends=[]
     for f in friend_list:
         if f.friend_status == 'F':
-            currentFriends.append([f.u_id, f.u_name, f.u_handle,f.firebase_id, str(f.u_id)+'_userProfPic','F'])
+            currentFriends.append([f.u_id, f.u_name, f.u_handle,f.firebase_id, f.u_key,'F'])
         elif int(f.requester) != int(f.u_id):
-            sentRequests.append([f.u_id, f.u_name, f.u_handle, f.firebase_id, str(f.u_id)+'_userProfPic','S'])
+            sentRequests.append([f.u_id, f.u_name, f.u_handle, f.firebase_id, f.u_key,'S'])
         elif int(f.requester) == int(f.u_id):
-            receivedRequests.append([f.u_id,f.u_name, f.u_handle, f.firebase_id, str(f.u_id)+'_userProfPic','R'])
+            receivedRequests.append([f.u_id,f.u_name, f.u_handle, f.firebase_id, f.u_key,'R'])
     label=['userID','userName','userHandle','firebaseID','key','isFriend']
     add_all='bucket'
     labelCurrentFriends = add_labels(label,currentFriends, add_all, PROF_BUCKET, keySize=kSize) 
@@ -3831,9 +3910,9 @@ def add_labels(labels, list_to_add, add_all_label=None, add_all=None, first_init
             else:
                 use_labels = labels
             for j,x in zip(k, use_labels):
-                print 'j: ', j
-                print 'x: ', x
-                print 'k: ', k
+                #print 'j: ', j
+                #print 'x: ', x
+                #print 'k: ', k
                 k_temp[x]=add_labels_helper(j,x,k, first_initial,keySize)
             if (add_all is not None):
                 k_temp[add_all_label]=add_all
@@ -3841,12 +3920,12 @@ def add_labels(labels, list_to_add, add_all_label=None, add_all=None, first_init
                 k_temp[add_all_label_2]=add_all_2
             temp.append(k_temp)
     except Exception, e:    
-        print str(e)
+        #print str(e)
         k_temp={}    
         for i in range(len(labels)):#j,x in k,labels:
-            print 'i: ', i
+            #print 'i: ', i
             x=labels[i] 
-            print 'x: ', x    
+            #print 'x: ', x    
             k_temp[x]=add_labels_helper(list_to_add[i],x,k, first_initial,keySize)         
         if (add_all is not None):
             k_temp[add_all_label]=add_all
@@ -3865,16 +3944,16 @@ def add_labels_helper(j,x,k, first_initial,keySize):
             res = 'yes'
     elif first_initial and 'userName' in x:
         res=first_and_initial(j)
-    elif 'momentCellType' in x:
+    elif 'chapterCellType' in x:
         if j == 'I':
             res = 'image'
         elif j== 'T':
             res = 'text'
     elif 'cellType' in x:
         if j == 0:
-            res = 'hostPost'
+            res = 'host'
         elif j== -1:
-            res = 'poolPost'
+            res = 'pool'
         else:
             res = 'post'
     elif 'amIAttending' in x:
@@ -3919,6 +3998,8 @@ def add_labels_helper(j,x,k, first_initial,keySize):
             res = 'poolPoolRequest'
         elif j == 'S':
             res = 'scrap'
+        elif j == 'T':
+            res = 'scrapImage'
         elif j =='D':
             res = 'friendRequest'
         elif j == 'C':
@@ -3954,9 +4035,11 @@ def add_labels_helper(j,x,k, first_initial,keySize):
         elif j == 'G':
             res = 'pool'
         elif j == 'M':
-            res = 'momentText'
+            res = 'chapterText'
         elif j == 'I':
-            res = 'momentImage'
+            res = 'chapterImage'
+        elif j == 'R':
+            res = 'reply'
     else:
         res=j
     return res
@@ -4026,7 +4109,7 @@ def push(deviceARN, badge, innerMessage, subject):
         device_arn = deviceARN  
         apns_dict = {'aps':{'alert':innerMessage,'badge':badge,'category':subject,'content-available':1}}
         apns_string = json.dumps(apns_dict,ensure_ascii=False)
-        message = {'APNS_SANDBOX':apns_string}
+        message = {'APNS':apns_string}
         messageJSON = json.dumps(message,ensure_ascii=False)
         sns.publish(Message=messageJSON, TargetArn=device_arn, MessageStructure='json')
     except Exception, e:
@@ -4046,8 +4129,10 @@ def checkInChat(sendID, recipID, recipFBID):
     options = {"expires":expiration}
     token = create_token(FIREBASE_SECRET, auth_payload, options)
     inConvo = (requests.get(FIREBASE_URL + '/chats/'+node+'/'+str(recipID)+'_inConversation.json?auth=' + str(token))).text
+    #print inConvo == 'null'
     inFriends = (requests.get(FIREBASE_URL + '/users/' + recipFBID + '/inFriendList.json?auth=' + str(token))).text
-    if (inConvo == 'false' or inConvo is None) and inFriends=='false':
+    #print inFriends
+    if (inConvo == 'false' or inConvo =='null') and inFriends=='false':
         return False #send
     else: 
         return True
@@ -4058,10 +4143,35 @@ def inNotification(recipFBID):
     options = {"expires":expiration}
     token = create_token(FIREBASE_SECRET, auth_payload, options)
     inNotific = (requests.get(FIREBASE_URL + '/users/'+recipFBID+'/inNotifications.json?auth=' + str(token))).text
-    if inNotific == 'true':
+    if inNotific == 'null':
+        requests.put(FIREBASE_URL + '/users/'+recipFBID+'/inPool.json?auth=' + str(token), data="false")
+        return False
+    elif inNotific == 'true':
         return True
     else:
         return False
+
+def inPool(recipFBID):
+    auth_payload = {'uid':'1'}
+    expiration = datetime.utcnow() + timedelta(minutes=30)
+    options = {"expires":expiration}
+    token = create_token(FIREBASE_SECRET, auth_payload, options)
+    inNotific = (requests.get(FIREBASE_URL + '/users/'+recipFBID+'/inPool.json?auth=' + str(token))).text
+    if inNotific == 'null':
+        requests.put(FIREBASE_URL + '/users/'+recipFBID+'/inPool.json?auth=' + str(token), data="-1")
+        return -1
+    return int(inNotific) #0 or poolID
+
+def inPostID(recipFBID):
+    auth_payload = {'uid':'1'}
+    expiration = datetime.utcnow() + timedelta(minutes=30)
+    options = {"expires":expiration}
+    token = create_token(FIREBASE_SECRET, auth_payload, options)
+    inNotific = (requests.get(FIREBASE_URL + '/users/'+recipFBID+'/inPostID.json?auth=' + str(token))).text
+    if inNotific == 'null':
+        requests.put(FIREBASE_URL + '/users/'+recipFBID+'/inPostID.json?auth=' + str(token), data="0")
+        return 0
+    return int(inNotific) #postID
 
 def firebaseNotification(fbID, mess):
     expiration = datetime.utcnow() + timedelta(minutes=30)
@@ -4079,6 +4189,7 @@ def logNotification(userID, contents, subject, notificType, notificPostID=None, 
         db.session.add(data_entered)
         db.session.commit()
     except Exception, e:
+        db.session.rollback()
         result=False
     finally:
         db.session.close()
@@ -4158,9 +4269,14 @@ def groupInteractRequestHelper(requesterID, groupID):
             cont = '@'+user_check.u_handle + ' has sent .'+g.group_handle + ' a request'
             notificType='R'
             notificUID=g.u_id
-            logNotification(notificUID, cont, subj, notificType, notificGroupID=groupID)
-            firebaseNotification(user_check.firebase_id, cont)
-            if g.device_arn !=0 and not inNotification(user_check.firebase_id):
+            inNot = inNotification(user_check.firebase_id)
+            if inNot==True:
+                logNotification(notificUID, cont, subj, notificType, notificGroupID=groupID)
+                firebaseNotification(user_check.firebase_id, cont)
+            if g.device_arn !=0 and inNot == False:
+                logNotification(notificUID, cont, subj, notificType, notificGroupID=groupID)
+                firebaseNotification(user_check.firebase_id, cont)
+                db.session.commit()
                 badge = db.session.query(notific.notific_id).filter(notific.n_u_id==g.u_id).filter(notific.notific_seen==False).count()
                 push(g.device_arn, badge, cont, subj)
 
@@ -4222,6 +4338,6 @@ from front.front import front_test
 application.register_blueprint(front_test)
 
 if __name__ == '__main__':    
-    application.debug = True
+    application.debug = False
     application.run(host='0.0.0.0')
     

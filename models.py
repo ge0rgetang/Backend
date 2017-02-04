@@ -29,6 +29,7 @@ class users(Base): #remove password, make firebaseID unique
     firebase_id = Column('firebase_id', String(191), nullable = False)
     device_arn = Column('device_arn', String(191), nullable = False, default=0)
     last_global_notific = Column('last_global_notific', Integer, nullable = False, default = 0) 
+    u_private = Column('u_private', Boolean, nullable=False, default = False)
 
     def verify_password(self, password):
         pwhash = bcrypt.hashpw(password.encode('utf-8'), self.u_paswd.encode('utf-8'))
@@ -230,6 +231,7 @@ class groupEventDetails(Base):
     event_end = Column('event_end', DateTime, nullable=False)
     attending_count = Column('attending_count', Integer, nullable=False, default=0)
     event_post_count = Column('event_post_count', Integer, nullable=False, default=0)
+    deleted = Column('deleted', Boolean, nullable=False, default = False)
 
     def __init__(self, group_id, event_name, event_description, event_start, event_end):
         self.group_id = group_id
@@ -428,7 +430,7 @@ class notific(Base):
     notific_cont = Column('notific_cont', String(191), nullable = False)
     notific_subject = Column('notific_subject', String(64), nullable = False)
     notific_seen = Column('notific_seen',Boolean, nullable=False, default=False)
-    notific_type = Column('notific_type',String(1),nullable=False) #F=Forum A=Anon G=Group H=Host M=myGroupRequest R=user request group invite D=friend Requst C=Chat
+    notific_type = Column('notific_type',String(1),nullable=False) #F=Forum A=Anon G=Group H=Host M=myGroupRequest R=user request group invite D=friend Requst C=Chat S=scrap T= scrapImage
     notific_post_id = Column('notific_post_id', Integer, nullable=True)
     notific_group_id = Column('notific_group_id', Integer, nullable = True)
     notific_other_id = Column('notific_other_id', Integer, nullable = True)
