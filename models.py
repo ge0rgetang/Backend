@@ -75,7 +75,7 @@ class friends(Base):
     friend_b = Column('friend_b', Integer, ForeignKey("users.u_id"), nullable=False)
     friend_status = Column('friend_status', CHAR, nullable=False) #B, P, F, D, U- unfriended
     date_time_request = Column ('date_time_request', DateTime, default=datetime.datetime.utcnow)
-    requester = Column('requester', CHAR, nullable=False)
+    requester = Column('requester', Integer, nullable=False)
 
     def __init__(self, friend_a, friend_b, requester, friend_status='P'):
         self.friend_a = friend_a
@@ -205,7 +205,7 @@ class groupPosts(Base):
     post_u_id = Column('post_u_id', Integer, ForeignKey("users.u_id"), nullable=False)
     date_time = Column('date_time', DateTime, default=datetime.datetime.utcnow)
     group_post_cont = Column('group_post_cont', String(191), nullable = False)
-    original_post_id = Column('original_post_id', Integer, nullable=False, default=0)
+    original_post_id = Column('original_post_id', Integer, nullable=False, default=0) #0=hostPost,  else parent postID XX -1=groupPost
     reply_count = Column('reply_count', Integer, nullable=False, default=0)
     points_count = Column('points_count', Integer, default=0)
     date_time_edited = Column('date_time_edited', DateTime, default=datetime.datetime.utcnow)
@@ -378,14 +378,18 @@ class pinnedPosts(Base):
     reply_count = Column('reply_count', Integer, nullable=False, default = 0)
     deleted = Column('deleted', Boolean, nullable=False, default = False)
     is_pinned = Column('is_pinned', Boolean, nullable=False, default=True)
+    pin_post_orig_pool_handle = Column('pin_post_orig_pool_handle', String(24), nullable=True)
+    pin_post_orig_chapter_name = Column('pin_post_orig_chapter_name', String(60), nullable=True)
 
-    def __init__(self, u_id, pin_type, pin_post_id, pin_post_orig_cont, original_post_id = 0, image_key = 'default'):
+    def __init__(self, u_id, pin_type, pin_post_id, pin_post_orig_cont, original_post_id = 0, image_key = 'default', pin_post_orig_pool_handle = None, pin_post_orig_chapter_name = None):
         self.u_id = u_id
         self.pin_type = pin_type
         self.pin_post_orig_cont = pin_post_orig_cont
         self.pin_post_id = pin_post_id
         self.original_post_id = original_post_id
         self.image_key = image_key
+        self.pin_post_orig_pool_handle = pin_post_orig_pool_handle
+        self.pin_post_orig_chapter_name = pin_post_orig_chapter_name
     
     def __repr__(self):
         return '<Pinned Post %r %r>' % self.pin_type %self.pin_post_id
@@ -430,19 +434,21 @@ class notific(Base):
     notific_cont = Column('notific_cont', String(191), nullable = False)
     notific_subject = Column('notific_subject', String(64), nullable = False)
     notific_seen = Column('notific_seen',Boolean, nullable=False, default=False)
-    notific_type = Column('notific_type',String(1),nullable=False) #F=Forum A=Anon G=Group H=Host M=myGroupRequest R=user request group invite D=friend Requst C=Chat S=scrap T= scrapImage
+    notific_type = Column('notific_type',String(1),nullable=False) #F=Forum A=Anon G=Group H=Host M=myGroupRequest R=user request group invite D=friend Requst C=Chat S=scrap T= scrapImage P=Tagging E=Chapter
     notific_post_id = Column('notific_post_id', Integer, nullable=True)
     notific_group_id = Column('notific_group_id', Integer, nullable = True)
     notific_other_id = Column('notific_other_id', Integer, nullable = True)
+    notific_event_id = Column('notific_event_id', Integer, nullable = True)
 
-    def __init__(self, n_u_id, notific_cont, notific_subject,notific_type, notific_post_id=None, notific_group_id=None, notific_other_id=None):
+    def __init__(self, n_u_id, notific_cont, notific_subject,notific_type, notific_post_id=None, notific_group_id=None, notific_other_id=None, notific_event_id=None):
         self.n_u_id = n_u_id
         self.notific_cont = notific_cont
         self.notific_subject = notific_subject
         self.notific_type = notific_type
         self.notific_post_id = notific_post_id
         self.notific_group_id = notific_group_id
-        self.notific_other_id = notific_other_id    
+        self.notific_other_id = notific_other_id 
+        self.notific_event_id = notific_event_id   
 
     def __repr__(self):
         return '<Notification ID %r>' % self.notific_id    

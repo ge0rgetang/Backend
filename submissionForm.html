@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <script src="https://cdn.firebase.com/js/client/1.0.18/firebase.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/3.6.2/firebase.js"></script>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="">
+    <meta name="author" content="">
+
+    <title>.native</title>
+
+    <!-- Bootstrap Core CSS -->
+    <link href="/static/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Custom Fonts -->
+    <link href="https://fonts.googleapis.com/css?family=Lato" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css?family=Catamaran:100,200,300,400,500,600,700,800,900" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css?family=Muli" rel="stylesheet">
+
+    <!-- Plugin CSS -->
+    <link rel="stylesheet" href="/static/vendor/font-awesome/css/font-awesome.min.css">
+    <link rel="stylesheet" href="/static/vendor/simple-line-icons/css/simple-line-icons.css">
+    <link rel="stylesheet" href="/static/vendor/device-mockups/device-mockups.min.css">
+
+    <!-- Theme CSS -->
+    <link href="/static/css/new-age.min.css" rel="stylesheet">
+
+    <!-- HTML5 Shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+        <script src="https://oss.maxcdn.com/libs/html5shiv/3.7.0/html5shiv.js"></script>
+        <script src="https://oss.maxcdn.com/libs/respond.js/1.4.2/respond.min.js"></script>
+    <![endif]-->
+    <!-- Facebook Pixel Code -->
+    <script>
+        !function(f,b,e,v,n,t,s)
+        {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+        n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+        n.queue=[];t=b.createElement(e);t.async=!0;
+        t.src=v;s=b.getElementsByTagName(e)[0];
+        s.parentNode.insertBefore(t,s)}(window,document,'script',
+        'https://connect.facebook.net/en_US/fbevents.js');
+         fbq('init', '377310822625072'); 
+        fbq('track', 'PageView');
+        fbq('track', 'CompleteRegistration');
+    </script>
+    <noscript>
+     <img height="1" width="1" 
+    src="https://www.facebook.com/tr?id=377310822625072&ev=PageView
+    &noscript=1"/>
+    </noscript>
+    <!-- End Facebook Pixel Code -->
+</head>
+
+<body id="page-top">
+        
+    <nav id="mainNav" class="navbar navbar-default navbar-fixed-top">
+        <div class="container">
+            <!-- Brand and toggle get grouped for better mobile display -->
+            <div class="navbar-header">
+                <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#bs-example-navbar-collapse-1">
+                    <span class="sr-only">Toggle navigation</span> Menu <i class="fa fa-bars"></i>
+                </button>
+                <a class="navbar-brand page-scroll" href="#page-top">.native</a>
+            </div>
+
+            <!-- Collect the nav links, forms, and other content for toggling -->
+            <div class="collapse navbar-collapse" id="bs-example-navbar-collapse-1">
+                <ul class="nav navbar-nav navbar-right">
+                    <li>
+                        <a class="page-scroll" href="/home#download">Download</a>
+                    </li>
+                    <!--
+                    <li>
+                        <a class="page-scroll" href="#features">Features</a>
+                    </li>
+                    -->
+                    <li>
+                        <a class="page-scroll" href="/home#contact">Contact</a>
+                    </li>
+                </ul>
+            </div>
+            <!-- /.navbar-collapse -->
+        </div>
+        <!-- /.container-fluid -->
+    </nav>
+    <header>
+        <div class="form">
+        <h1 id="jTitle">App Tester</h1>
+        <br>
+        <h3 id="descript">We're .native, a local startup looking for our second round of App Testers. Our free app is a local social network. We will pay you $50 to use our app for one week, on your time. Requirements include:</h3>
+        <h3 id="descript">
+            <ul>
+                <li>2 posts/day and 1 reply/day to someone else's post (posts should be at least a few words)</li>
+                <li>Keep track of any bugs encountered, as well as providing a few sentences of feedback</li>
+                <li>Tell as many of your friends/frat brothers/sorority sisters/classmates as you can about us!</li>
+            </ul>
+        </h3>
+        <h3 id="descript">Additionally, some variation of iPhone (5, 6, or 7) is needed, as iOS 10 is required. Please use your berkeley.edu address in the email field as only Cal students may participate. You must also be in a frat/sorority.</h3>
+        <h3 id="descript">If chosen, we will contact you through phone and email to set up a quick meeting near campus where we will introduce you to the app, go over specifics, and answer any questions. Thanks, and go bears!</h3>
+        <h2 id="form-success" class="text-success"></h2>
+        <h2 id="form-error" class="text-danger"></h2>
+        <form class="signup-form form-inline" id="submission-form" role="form" onsubmit="return submitForm()">
+          <fieldset>
+            <legend>Applicant Information</legend>
+            <input id="fName" type="text" required placeholder="First Name"><br>
+            <input id="lName" type="text" required placeholder="Last Name"><br><br>  
+            <select id="year" required form="submission">
+              <option disabled selected value> -- select a year -- </option>
+              <option value="Freshman">Freshman</option>
+              <option value="Sophomore">Sophomore</option>
+              <option value="Junior">Junior</option>
+              <option value="Senior+">Senior+</option>
+            </select><br><br>
+            <input id="major" type="text" required placeholder="Major"><br><br>
+            <input id="email" type="email" required placeholder="eMail"><br><br>
+            <input id="tel" type="tel" required placeholder="Phone Number"><br><br>
+            <select id="phonetype" form="submission" required>
+              <option disabled selected value> -- select a phone type -- </option>
+              <option value="iPhone5">iPhone 5</option>
+              <option value="iPhone5C">iPhone 5C</option>
+              <option value="iPhone5S">iPhone 5S</option>
+              <option value="iPhone6">iPhone 6</option>
+              <option value="iPhone6Plus">iPhone 6 plus</option>
+              <option value="iPhone6S">iPhone 6S</option>
+              <option value="iPhone6SPlus">iPhone 6S plus</option>
+              <option value="iPhoneSE">iPhone SE</option>
+              <option value="iPhone7">iPhone 7</option>
+              <option value="iPhone7Plus">iPhone 7 plus</option>
+              <option value="other">Other</option>
+            </select><br><br>
+            <input id="greek" type="text" required placeholder="Frat/Sorority"><br><br>
+            <button class="btn btn-sccess" id="saveForm" type="submit">Submit</button>
+          </fieldset>
+        </form>
+        </div>
+    </header>
+</body>
+
+<footer>
+    <div class="container">
+        <p>&copy; 2016 .native. All Rights Reserved.</p>
+        <ul class="list-inline">
+            <li>
+                <a href="https://www.iubenda.com/privacy-policy/7955712">Privacy</a>
+            </li>
+        </ul>
+    </div>
+</footer>
+
+<script>
+    
+    var signupForm = document.getElementById('submission-form');
+    var signupSuccess = document.getElementById('form-success');
+    var signupError = document.getElementById('form-error');
+
+    var sendBtn = document.getElementById('saveForm');
+
+    var onSubmitComplete = function(error) {
+      sendBtn.disabled = false;
+      if (error) {
+        signupError.innerHTML = 'Application not submitted. Please try again.';
+      } else {
+        signupSuccess.innerHTML = "Application Submitted. Thank you for applying. We will contact you if chosen.";
+        // hide the form
+        signupForm.style.display = 'none';
+      }
+    };
+    function submitForm(formObj) {
+        var fNameToSend = document.getElementById('fName').value;
+        var lNameToSend = document.getElementById('lName').value;
+        var yearToSend = document.getElementById('year').value;
+        var majorToSend = document.getElementById('major').value;
+        var emailToSend = document.getElementById('email').value;
+        var telToSend = document.getElementById('tel').value;
+        var phoneTypeToSend = document.getElementById('phonetype').value;
+        var greekToSend = document.getElementById('greek').value;
+    
+        var newSubmission = {
+          "fname": fNameToSend,
+          "lname": lNameToSend,
+          "major": majorToSend,
+          "email": emailToSend,
+          "tel": telToSend,
+          "greek": greekToSend,
+        }
+  
+        //create a new connection to firebase
+        var ref = new Firebase('https://dotnative-2ec5a.firebaseio.com/applicants2/'.concat(phoneTypeToSend).concat('/').concat(yearToSend));
+        ref.push(newSubmission, onSubmitComplete);
+        sendBtn.disabled = true;
+        return false;
+    }
+    
+</script>
+
+</html>
