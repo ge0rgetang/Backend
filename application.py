@@ -26,17 +26,17 @@ from flask_sslify import SSLify
 
 
 
-PROF_BUCKET = 'hostpostuserprof'
-GROUP_BUCKET = 'hostpostgroup'
-EVENT_BUCKET = 'hostposteventimage'
+PROF_BUCKET = ''
+GROUP_BUCKET = ''
+EVENT_BUCKET = ''
 #PLATFORM_APPLICATION_ARN = 'arn:aws:sns:us-west-1:554061732115:app/APNS_SANDBOX/hostPostDev' #Test
-PLATFORM_APPLICATION_ARN = 'arn:aws:sns:us-west-1:554061732115:app/APNS/.native'
-AWS_ACCESS_KEY_ID = "AKIAJFOIRUAH3BFBSW4A"#"AKIAIAWLQ6C2HQNAFCOA"
-AWS_SECRET_ACCESS_KEY = "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"#"r9Cb5qyfGttKN5V7qEiGuV/XDp4pYUCI8NrhG56L"
+PLATFORM_APPLICATION_ARN = ''
+AWS_ACCESS_KEY_ID = "
+AWS_SECRET_ACCESS_KEY = ""#""
 DEFAULT_LIMIT = 42
 SECONDARY_LIMIT = 88
-FIREBASE_URL = 'https://dotnative-2ec5a.firebaseio.com'
-FIREBASE_SECRET = 'zBQLIb0ly88Sw2mjLPdfo6tbsUEQ5TpOMvXX9HyA'
+FIREBASE_URL = ''
+FIREBASE_SECRET = ''
 
 EXCLUDED_HANDLES = ["ge0rgetang", "georgetang", "gtang", "gtang42", "gtang43", "george", "georget", "tang", "simon", "randy", "MTVacuum"]
 
