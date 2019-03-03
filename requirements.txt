@@ -31,7 +31,7 @@ pycparser==2.14
 pycrypto==2.7.0
 PyMySQL==0.6.3
 python-dateutil==2.6.0
-python-firebase==1.8
+python-firebase==1.7
 PyYAML>=4.2b1
 requests==2.20.0
 rsa==3.4.2
